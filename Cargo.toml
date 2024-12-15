@@ -1,0 +1,17 @@
+[workspace]
+
+resolver = "2"
+members = [
+    "app",
+    "utils",
+]
+
+[workspace.dependencies]
+embedded-hal = { version = "^1.0" }
+embedded-hal-mock = { version = "^0.11", features = ["eh1","embedded-hal-async"] }
+
+embassy-time = {version = "^0.3" , features = ["generic-queue"]}
+embassy-net = { version = "^0.4", features = ["proto-ipv4", "tcp", "udp", "dns", "medium-ethernet", "dhcpv4"] }
+embassy-executor = "^0.6"
+
+static_cell = { version = "^2.0", features = ["nightly"] }
