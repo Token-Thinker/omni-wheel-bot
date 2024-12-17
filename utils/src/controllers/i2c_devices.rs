@@ -3,17 +3,54 @@
 
 use crate::controllers::WheelKinematics;
 use core::cell::RefCell;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embedded_hal::i2c::I2c;
 use embedded_hal_bus::i2c::RefCellDevice;
 use icm42670::accelerometer::{Accelerometer, Error as AccelerometerError};
 use icm42670::{Address as imu_address, Error as ImuError, Icm42670, PowerMode};
 use pwm_pca9685::{Address as pwm_address, Channel, Error as PwmError, Pca9685};
+use serde::{Deserialize, Serialize};
+
+pub static CHANNEL: embassy_sync::channel::Channel<CriticalSectionRawMutex, I2CCommand, 64> = embassy_sync::channel::Channel::new();
 
 #[derive(Debug)]
 pub enum DeviceError<E: core::fmt::Debug> {
     PwmError(PwmError<E>),
     ImuError(ImuError<E>),
     AccelError(AccelerometerError<ImuError<E>>),
+}
+
+/// A **single** enum that covers both motion and device commands.
+#[derive(Debug, Serialize, Deserialize)]
+pub enum I2CCommand {
+    // ------------------------------------------------------------------------
+    // Motion control variants
+    // ------------------------------------------------------------------------
+    /// Omnidirectional Translation (no rotation).
+    T { d: f32, s: f32 },
+
+    /// Pure rotation in place (yaw).
+    Y { s: f32, o: Option<f32> },
+
+    /// Combined translational + rotational command (ideal for dual joysticks).
+    O {
+        d: f32,
+        s: f32,
+        rs: f32,
+        o: Option<f32>,
+    },
+
+    // ------------------------------------------------------------------------
+    // Device management variants
+    // ------------------------------------------------------------------------
+    /// Read IMU data (accelerometer, gyro, temp).
+    ReadIMU,
+
+    /// Enable PWM & IMU hardware.
+    Enable,
+
+    /// Disable PWM & IMU hardware.
+    Disable,
 }
 
 pub struct I2CDevices<'a, I2C> {
@@ -28,6 +65,7 @@ where
     I2C: I2c<Error = E>,
     E: core::fmt::Debug,
 {
+    /// Creates a new `I2CDevices` instance, initializing IMU and PCA9685 PWM.
     pub fn new(
         i2c: &'static RefCell<I2C>,
         wheel_radius: f32,
@@ -53,7 +91,6 @@ where
             on[i] = 0;
             off[i] = 0x0FFF; // 4096 sets the full-on bit
         }
-
         pwm.set_all_on_off(&on, &off)
             .map_err(DeviceError::PwmError)?;
 
@@ -73,41 +110,125 @@ where
         })
     }
 
-    pub fn set_motor_velocities(
+    /// **Single** dispatcher method for all motion & device commands.
+    /// - Returns `Ok(Some(...))` if the command is `ReadIMU` (with the IMU data).
+    /// - Otherwise returns `Ok(None)`.
+    pub fn execute_command(
+        &mut self,
+        command: I2CCommand,
+    ) -> Result<Option<((f32, f32, f32), (f32, f32, f32), f32)>, DeviceError<E>> {
+        match command {
+            // ----------------------------------------------------------------
+            // Motion commands
+            // ----------------------------------------------------------------
+            I2CCommand::T { d, s } => {
+                self.set_motor_velocities_strafe(d, s)?;
+                Ok(None)
+            }
+            I2CCommand::Y {s, o} => {
+                self.set_motor_velocities_rotate(s, o)?;
+                Ok(None)
+            }
+            I2CCommand::O {
+                d,
+                s,
+                rs,
+                o,
+            } => {
+                let orientation = o.unwrap_or(0.0);
+                let new_orientation = (orientation + rs) % 360.0;
+
+                // Compute wheel velocities for simultaneous strafe + rotate
+                let wheel_speeds =
+                    self.kinematics
+                        .compute_wheel_velocities(s, d, new_orientation, rs);
+                self.apply_wheel_speeds(&wheel_speeds)?;
+                Ok(None)
+            }
+
+            // ----------------------------------------------------------------
+            // Device management commands
+            // ----------------------------------------------------------------
+            I2CCommand::ReadIMU => {
+                let data = self.read_imu()?;
+                Ok(Some(data)) // Return the IMU sensor data
+            }
+            I2CCommand::Enable => {
+                self.enable()?;
+                Ok(None)
+            }
+            I2CCommand::Disable => {
+                self.disable()?;
+                Ok(None)
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Internal helpers for strafe vs rotate
+    // ------------------------------------------------------------------------
+
+    /// Strafe without rotation
+    fn set_motor_velocities_strafe(
         &mut self,
         direction: f32,
         speed: f32,
-        rotation_enabled: bool,
-        orientation: Option<f32>,
     ) -> Result<(), DeviceError<E>> {
-        let wz = if rotation_enabled { speed } else { 0.0 };
-        let orientation = orientation.unwrap_or(0.0);
-
-        let new_orientation = (orientation + wz) % 360.0;
-
+        let wz = 0.0;
+        let orientation = 0.0;
         let wheel_speeds =
             self.kinematics
-                .compute_wheel_velocities(speed, direction, new_orientation, wz);
+                .compute_wheel_velocities(speed, direction, orientation, wz);
 
-        for (i, &(ph, en)) in self.motor_channels.iter().enumerate() {
-            let speed = wheel_speeds[i];
-            let duty_cycle = speed.abs().min(1.0) * 4095.0;
-            let direction = speed >= 0.0;
-
-            const MAX_DUTY: u16 = 4095;
-
-            // **Direction Control:**
-            self.pwm
-                .set_channel_on_off(ph, 0, if direction { 0 } else { MAX_DUTY })
-                .map_err(DeviceError::PwmError)?;
-
-            // **Speed Control:**
-            self.pwm
-                .set_channel_on_off(en, 0, duty_cycle as u16)
-                .map_err(DeviceError::PwmError)?;
-        }
+        self.apply_wheel_speeds(&wheel_speeds)?;
         Ok(())
     }
+
+    /// Pure rotation in place
+    fn set_motor_velocities_rotate(
+        &mut self,
+        speed: f32,
+        orientation: Option<f32>,
+    ) -> Result<(), DeviceError<E>> {
+        let wz = speed;
+        let orientation = orientation.unwrap_or(0.0);
+        let new_orientation = (orientation + wz) % 360.0;
+
+        // No translational speed
+        let wheel_speeds =
+            self.kinematics
+                .compute_wheel_velocities(0.0, 0.0, new_orientation, wz);
+
+        self.apply_wheel_speeds(&wheel_speeds)?;
+        Ok(())
+    }
+
+    /// Writes the computed wheel speeds to PCA9685 channels
+    fn apply_wheel_speeds(&mut self, wheel_speeds: &[f32]) -> Result<(), DeviceError<E>> {
+        const MAX_DUTY: u16 = 4095;
+
+        for (i, &(phase_channel, enable_channel)) in self.motor_channels.iter().enumerate() {
+            let speed = wheel_speeds[i];
+            let duty_cycle = speed.abs().min(1.0) * (MAX_DUTY as f32);
+            let direction = speed >= 0.0;
+
+            // Direction Control
+            self.pwm
+                .set_channel_on_off(phase_channel, 0, if direction { 0 } else { MAX_DUTY })
+                .map_err(DeviceError::PwmError)?;
+
+            // Speed Control
+            self.pwm
+                .set_channel_on_off(enable_channel, 0, duty_cycle as u16)
+                .map_err(DeviceError::PwmError)?;
+        }
+
+        Ok(())
+    }
+
+    // ------------------------------------------------------------------------
+    // IMU & PWM/IMU Power Control
+    // ------------------------------------------------------------------------
 
     pub fn read_imu(&mut self) -> Result<((f32, f32, f32), (f32, f32, f32), f32), DeviceError<E>> {
         let accel = self.imu.accel_norm().map_err(DeviceError::AccelError)?;
@@ -119,6 +240,7 @@ where
     pub fn enable(&mut self) -> Result<(), DeviceError<E>> {
         self.pwm.enable().map_err(DeviceError::PwmError)?;
         self.pwm.set_prescale(3).map_err(DeviceError::PwmError)?;
+
         let power_mode = PowerMode::SixAxisLowNoise;
         self.imu
             .set_power_mode(power_mode)

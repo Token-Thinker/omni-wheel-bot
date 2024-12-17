@@ -9,9 +9,14 @@ members = [
 [workspace.dependencies]
 embedded-hal = { version = "^1.0" }
 embedded-hal-mock = { version = "^0.11", features = ["eh1","embedded-hal-async"] }
+embedded-io-async = {version = "^0.6"}
 
 embassy-time = {version = "^0.3" , features = ["generic-queue"]}
 embassy-net = { version = "^0.4", features = ["proto-ipv4", "tcp", "udp", "dns", "medium-ethernet", "dhcpv4"] }
-embassy-executor = "^0.6"
+embassy-executor = { version = "^0.6" }
+embassy-sync = {version = "^0.6"}
 
 static_cell = { version = "^2.0", features = ["nightly"] }
+tracing = {version = "^0.1", default-features = false, features = ["log", "attributes"]}
+serde = { version = "^1", default-features = false, features = ["derive"] }
+serde_json = { version = "^1", features = ["alloc"], default-features = false }

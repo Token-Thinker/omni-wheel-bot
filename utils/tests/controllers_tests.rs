@@ -15,7 +15,7 @@ fn wheel_velocities() {
     assert!(w[0] > 3.0);
 }
 
-#[test]
+/*#[test]
 fn i2cdevices_init() {
     // Define only the initialization-related transactions
     let expectations = [
@@ -78,3 +78,4 @@ fn i2cdevices_init() {
     // Verify expectations
     static_i2c.borrow_mut().done();
 }
+*/

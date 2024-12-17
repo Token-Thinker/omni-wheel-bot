@@ -15,32 +15,28 @@ default = []
 std = ["libm/default"]
 
 [dependencies]
-libm = "0.2.11"
 
+static_cell = {workspace = true}
 embedded-hal = {workspace = true}
 embedded-hal-mock = {workspace = true}
-embedded-hal-bus = { version = "0.2.0", features = ["async"] }
 
 #I2C drivers
 pwm-pca9685 = "1.0.0"
 icm42670 = "0.2.0"
 
+libm = "0.2.11"
+embedded-hal-bus = { version = "0.2.0", features = ["async"] }
+
+#Comms
+picoserve = {version = "^0.12", features = ["embassy"]}
 embassy-net = {workspace = true}
-embassy-executor = {workspace = true}
 embassy-time = {workspace = true}
-
-static_cell = {workspace = true}
-
-
-embedded-io-async = "0.6.1"
-
-serde = { version = "1.0.215", features = ["derive"] }
-bincode = "1.3.2"
-heapless = "0.8.0"
-tracing = "0.1.41"
+embassy-sync = {workspace = true}
+embassy-executor = {workspace = true}
 
 
-
-
+tracing = {workspace = true}
+serde = {workspace = true}
+serde_json = {workspace = true}
 
 [build-dependencies]
