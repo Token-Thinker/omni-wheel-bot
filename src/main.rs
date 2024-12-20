@@ -31,8 +31,15 @@ macro_rules! mk_static {
     }};
 }
 
-const SSID: &str = "test";
-const PASSWORD: &str = "test";
+//const SSID: &str = option_env!("SSID").unwrap_or("Guest");
+//const PASSWORD: &str = option_env!("PASSWORD").unwrap_or("password123");
+
+const SSID: &str = "Test";
+const PASSWORD: &str = "Test";
+
+static I2C_REF: static_cell::StaticCell<RefCell<I2c<'static, Blocking>>> = static_cell::StaticCell::new();
+static DEVICES: static_cell::StaticCell<I2CDevices<'static, I2c<'static, Blocking>>> = static_cell::StaticCell::new();
+
 
 #[panic_handler]
 pub fn panic(_info: &core::panic::PanicInfo) -> ! { loop {} }
@@ -45,17 +52,14 @@ async fn main(spawner: Spawner) -> ! {
         config
     });
 
-
-
     let i2c = I2c::new(peripherals.I2C0, Config::default())
         .with_sda(peripherals.GPIO21)
         .with_scl(peripherals.GPIO22);
 
-    let i2c_ref = RefCell::new(i2c);
-    let devices = I2CDevices::new(i2c_ref, 0.148, 0.195).expect("Failed to initialize devices");
-
-
-
+    let i2c_ref = I2C_REF.init(RefCell::new(i2c));
+    let devices = DEVICES.init(
+        I2CDevices::new(i2c_ref, 0.148, 0.195).expect("Failed to initialize devices")
+    );
     esp_alloc::heap_allocator!(72 * 1024);
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
@@ -168,7 +172,7 @@ async fn net_task(stack: &'static Stack<WifiDevice<'static, WifiStaDevice>>) {
 
 #[embassy_executor::task]
 pub async fn handle_message(
-    mut devices: I2CDevices<'static, I2c<'static, Blocking>>,
+    devices: &'static mut I2CDevices<'static, I2c<'static, Blocking>>,
 ) -> !
 {
     loop {
@@ -188,7 +192,6 @@ pub async fn handle_message(
             }
             Err(err) => {
                 tracing::error!(?err, "Failed to execute I2C command");
-                return Err(err.into());
             }
         }
     }

@@ -3,8 +3,8 @@
 use crate::utils::controllers::WheelKinematics;
 
 use core::cell::RefCell;
-use esp_hal::Blocking;
-use esp_hal::i2c::master::I2c as espI2c;
+//use esp_hal::Blocking;
+//use esp_hal::i2c::master::I2c as espI2c;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embedded_hal::i2c::I2c;
 use embedded_hal_bus::i2c::RefCellDevice;
@@ -58,30 +58,29 @@ pub enum I2CCommand {
 }
 
 pub struct I2CDevices<'a, I2C> {
+    i2c: &'a RefCell<I2C>,
     pwm: Pca9685<RefCellDevice<'a, I2C>>,
     imu: Icm42670<RefCellDevice<'a, I2C>>,
     motor_channels: [(Channel, Channel); 3],
     kinematics: WheelKinematics,
 }
 
-impl<I2C, E> I2CDevices<'_, I2C>
+impl<'a, I2C, E> I2CDevices<'a, I2C>
 where
-    I2C: I2c<Error = E>,
+    I2C: I2c<Error = E> + 'a,
     E: core::fmt::Debug,
 {
     /// Creates a new `I2CDevices` instance, initializing IMU and PCA9685 PWM.
     pub fn new(
-        i2c: RefCell<espI2c<Blocking>>,
+        i2c: &'a RefCell<I2C>,
         wheel_radius: f32,
         robot_radius: f32,
     ) -> Result<Self, DeviceError<E>>
-    where
-        I2C: 'static,
     {
-        let imu = Icm42670::new(RefCellDevice::new(&i2c), imu_address::Primary)
+        let imu = Icm42670::new(RefCellDevice::new(i2c), imu_address::Primary)
             .map_err(DeviceError::ImuError)?;
 
-        let mut pwm = Pca9685::new(RefCellDevice::new(&i2c), pwm_address::default())
+        let mut pwm = Pca9685::new(RefCellDevice::new(i2c), pwm_address::default())
             .map_err(DeviceError::PwmError)?;
 
         pwm.enable().map_err(DeviceError::PwmError)?;
@@ -98,19 +97,16 @@ where
         pwm.set_all_on_off(&on, &off)
             .map_err(DeviceError::PwmError)?;
 
-        let motor_channels = [
-            (Channel::C6, Channel::C7), // Motor 0
-            (Channel::C2, Channel::C3), // Motor 1
-            (Channel::C4, Channel::C5), // Motor 2
-        ];
-
-        let kinematics = WheelKinematics::new(wheel_radius, robot_radius);
-
         Ok(Self {
+            i2c,
             pwm,
             imu,
-            motor_channels,
-            kinematics,
+            motor_channels: [
+                (Channel::C6, Channel::C7),
+                (Channel::C2, Channel::C3),
+                (Channel::C4, Channel::C5),
+            ],
+            kinematics: WheelKinematics::new(wheel_radius, robot_radius),
         })
     }
 
