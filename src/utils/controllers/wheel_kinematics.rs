@@ -1,5 +1,6 @@
 use core::f32::consts::PI;
 use libm;
+use micromath::F32Ext;
 
 pub struct WheelKinematics {
     /// Radius of each wheel (m)

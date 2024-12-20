@@ -1,12 +1,14 @@
 #![no_std]
 #![no_main]
 
+mod utils;
+use utils::connection::{run as websocket_server};
+use utils::controllers::{I2CDevices, CHANNEL};
+
 use core::cell::RefCell;
 use embassy_executor::Spawner;
 use embassy_net::{tcp::TcpSocket, Ipv4Address, Stack, StackResources};
 use embassy_time::{Duration, Timer};
-use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
-use serde::{Deserialize, Serialize};
 
 use esp_alloc as _;
 use esp_hal::{prelude::*, rng::Rng, timer::timg::TimerGroup, i2c::master::{Config, I2c}, Blocking};
@@ -19,11 +21,6 @@ use esp_wifi::{
     EspWifiController,
 };
 
-use utils::connection::{run as websocket_server};
-use utils::controllers::{I2CCommand, I2CDevices, CHANNEL};
-
-
-
 // When you are okay with using a nightly compiler it's better to use https://docs.rs/static_cell/2.1.0/static_cell/macro.make_static.html
 macro_rules! mk_static {
     ($t:ty,$val:expr) => {{
@@ -34,8 +31,11 @@ macro_rules! mk_static {
     }};
 }
 
-const SSID: &str = env!("SSID");
-const PASSWORD: &str = env!("PASSWORD");
+const SSID: &str = "test";
+const PASSWORD: &str = "test";
+
+#[panic_handler]
+pub fn panic(_info: &core::panic::PanicInfo) -> ! { loop {} }
 
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) -> ! {
@@ -52,7 +52,7 @@ async fn main(spawner: Spawner) -> ! {
         .with_scl(peripherals.GPIO22);
 
     let i2c_ref = RefCell::new(i2c);
-    let devices = I2CDevices::new(&i2c_ref, 0.148, 0.195).expect("Failed to initialize devices");
+    let devices = I2CDevices::new(i2c_ref, 0.148, 0.195).expect("Failed to initialize devices");
 
 
 
@@ -112,6 +112,8 @@ async fn main(spawner: Spawner) -> ! {
         Timer::after(Duration::from_millis(500)).await;
     }
 
+    spawner.spawn(handle_message(devices)).unwrap();
+
     // Run the WebSocket comms
     websocket_server(
         0,    // ID for the WebSocket comms instance
@@ -119,8 +121,6 @@ async fn main(spawner: Spawner) -> ! {
         stack, None,
     )
         .await;
-
-    spawner.spawn(handle_message(devices)).unwrap();
 
 
 }
@@ -168,7 +168,7 @@ async fn net_task(stack: &'static Stack<WifiDevice<'static, WifiStaDevice>>) {
 
 #[embassy_executor::task]
 pub async fn handle_message(
-    mut devices: I2CDevices<I2c<Blocking>>,
+    mut devices: I2CDevices<'static, I2c<'static, Blocking>>,
 ) -> !
 {
     loop {
@@ -193,3 +193,4 @@ pub async fn handle_message(
         }
     }
 }
+

@@ -7,8 +7,7 @@ use picoserve::{
     },
     Router,
 };
-use crate::controllers;
-use crate::controllers::{I2CCommand, I2CDevices, CHANNEL};
+use crate::utils::controllers::{I2CCommand, I2CDevices, CHANNEL};
 
 pub async fn run<Driver: NetworkDriver>(
     id: usize,

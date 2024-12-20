@@ -1,3 +1,4 @@
+/*
 pub use embedded_hal_mock::eh1::i2c::{Mock as I2cMock, Transaction as I2cTrans};
 
 pub const PWM_ADDRESS: u8 = 0x40;
@@ -19,4 +20,4 @@ pub fn write_read(
     read_data: Vec<u8>,
 ) -> I2cTrans {
     I2cTrans::write_read(addr, write_data, read_data)
-}
+}*/

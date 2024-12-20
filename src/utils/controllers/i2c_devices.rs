@@ -1,8 +1,10 @@
 //! I2C Devices Module
 //! This module handles I2C-connected devices, including motor control and IMU integration.
+use crate::utils::controllers::WheelKinematics;
 
-use crate::controllers::WheelKinematics;
 use core::cell::RefCell;
+use esp_hal::Blocking;
+use esp_hal::i2c::master::I2c as espI2c;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embedded_hal::i2c::I2c;
 use embedded_hal_bus::i2c::RefCellDevice;
@@ -10,6 +12,8 @@ use icm42670::accelerometer::{Accelerometer, Error as AccelerometerError};
 use icm42670::{Address as imu_address, Error as ImuError, Icm42670, PowerMode};
 use pwm_pca9685::{Address as pwm_address, Channel, Error as PwmError, Pca9685};
 use serde::{Deserialize, Serialize};
+
+use micromath::F32Ext;
 
 pub static CHANNEL: embassy_sync::channel::Channel<CriticalSectionRawMutex, I2CCommand, 64> = embassy_sync::channel::Channel::new();
 
@@ -67,7 +71,7 @@ where
 {
     /// Creates a new `I2CDevices` instance, initializing IMU and PCA9685 PWM.
     pub fn new(
-        i2c: &'static RefCell<I2C>,
+        i2c: RefCell<espI2c<Blocking>>,
         wheel_radius: f32,
         robot_radius: f32,
     ) -> Result<Self, DeviceError<E>>
