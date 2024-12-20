@@ -1,3 +1,14 @@
+//! WebSocket Server Module
+//!
+//! This module defines the WebSocket server implementation using the `picoserve` framework.
+//! It manages incoming WebSocket connections, processes I2C commands, and communicates with
+//! the embedded control system through a channel interface.
+//!
+//! # Components
+//! - `run`: Starts the WebSocket server.
+//! - `ServerTimer`: Manages async timeouts.
+//! - `WebSocket`: Defines WebSocket behavior for handling client messages.
+
 use embassy_net::{driver::Driver as NetworkDriver, Stack};
 use embassy_time::Duration;
 use picoserve::{
@@ -9,6 +20,16 @@ use picoserve::{
 };
 use crate::utils::controllers::{I2CCommand, CHANNEL};
 
+/// Starts the WebSocket server with the provided configuration.
+///
+/// # Parameters
+/// - `id`: Unique server identifier.
+/// - `port`: Port to listen on.
+/// - `stack`: Network stack for communication.
+/// - `config`: Optional server configuration.
+///
+/// # Returns
+/// This function runs indefinitely.
 pub async fn run<Driver: NetworkDriver>(
     id: usize,
     port: u16,
@@ -40,15 +61,18 @@ pub async fn run<Driver: NetworkDriver>(
         &mut tx_buffer,
         &mut http_buffer,
     )
-    .await
+        .await
 }
 
+/// Manages timeouts for the WebSocket server.
 pub struct ServerTimer;
 
 #[allow(unused_qualifications)]
 impl picoserve::Timer for ServerTimer {
     type Duration = embassy_time::Duration;
     type TimeoutError = embassy_time::TimeoutError;
+
+    /// Runs a future with a timeout.
     async fn run_with_timeout<F: core::future::Future>(
         &mut self,
         duration: Self::Duration,
@@ -58,6 +82,7 @@ impl picoserve::Timer for ServerTimer {
     }
 }
 
+/// Handles incoming WebSocket connections.
 pub struct WebSocket;
 
 impl WebSocketCallback for WebSocket {
@@ -91,10 +116,7 @@ impl WebSocketCallback for WebSocket {
                         }
                     }
                 }
-                Ok(Message::Binary(data)) => match serde_json::from_slice::<
-                    I2CCommand,
-                >(data)
-                {
+                Ok(Message::Binary(data)) => match serde_json::from_slice::<I2CCommand>(data) {
                     Ok(message) => {
                         CHANNEL.send(message).await;
                         tx.send_binary(data).await?
@@ -103,7 +125,6 @@ impl WebSocketCallback for WebSocket {
                 },
                 Err(error) => {
                     tracing::error!(?error, "websocket error");
-
                     let code = match error {
                         ReadMessageError::TextIsNotUtf8 => 1007,
                         ReadMessageError::ReservedOpcode(_) => 1003,
@@ -112,7 +133,6 @@ impl WebSocketCallback for WebSocket {
                         | ReadMessageError::MessageStartsWithContinuation => 1002,
                         ReadMessageError::Io(err) => return Err(err),
                     };
-
                     break Some((code, "Websocket Error"));
                 }
             };

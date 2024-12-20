@@ -8,47 +8,43 @@ license = "MIT OR Apache-2.0"
 resolver = "2"
 
 [dependencies]
-esp-backtrace = { version = "0.14.2", features = [
-    "esp32",
-    "exception-handler",
-    "println",
-]}
 
-esp-hal = { version = "0.22.0", features = [
-    "esp32",
-] }
+# ESP32 and Hardware Abstraction Layer
+esp-backtrace = { version = "0.14.2", features = ["esp32", "exception-handler", "println"] }
+esp-hal = { version = "0.22.0", features = ["esp32"] }
 esp-println = { version = "0.12.0", features = ["esp32", "log"] }
-log = { version = "0.4.22" }
-
-esp-hal-embassy = {version = "0.5.0", features = ["esp32"]}
-embassy-time = {version = "^0.3" , features = ["generic-queue"]}
-embassy-executor = { version = "^0.6" }
-
-esp-wifi = {version = "0.11.0", features = ["esp32", "wifi", "utils", "defmt"]}
-esp-alloc = {version = "0.5.0"}
+esp-hal-embassy = { version = "0.5.0", features = ["esp32"] }
+esp-wifi = { version = "0.11.0", features = ["esp32", "wifi", "utils"] }
+esp-alloc = { version = "0.5.0" }
 cfg-if = "1.0.0"
 
+# Embedded Frameworks
 embedded-hal = { version = "^1.0" }
-embedded-io-async = {version = "^0.6"}
+embedded-hal-bus = { version = "0.2.0", features = ["async"] }
+embedded-io-async = { version = "^0.6" }
+libm = "0.2.11"
 
+# Embassy Framework (Async Execution)
+embassy-time = { version = "^0.3", features = ["generic-queue"] }
+embassy-executor = { version = "^0.6" }
 embassy-net = { version = "0.4.0", features = ["proto-ipv4", "tcp", "udp", "dns", "medium-ethernet", "dhcpv4"] }
-embassy-sync = {version = "^0.6"}
+embassy-sync = { version = "^0.6" }
 
-static_cell = { version = "^2.0", features = ["nightly"] }
-tracing = {version = "^0.1", default-features = false, features = ["log", "attributes"]}
+# Logging and Debugging
+log = { version = "0.4.22" }
+tracing = { version = "^0.1", default-features = false, features = ["log", "attributes"] }
+
+# Serialization
 serde = { version = "^1", default-features = false, features = ["derive"] }
 serde_json = { version = "^1", features = ["alloc"], default-features = false }
 
-#I2C drivers
+# I2C Drivers and Devices
 pwm-pca9685 = "1.0.0"
 icm42670 = "0.2.0"
 
-libm = "0.2.11"
-embedded-hal-bus = { version = "0.2.0", features = ["async"] }
+# Communications and Utilities
+picoserve = { version = "^0.12", features = ["embassy"] }
+micromath = { version = "2.1.0" }
 
-#Comms
-picoserve = {version = "^0.12", features = ["embassy"]}
-
-micromath = {version = "2.1.0"}
-
-#embedded-hal-mock = { version = "^0.11", features = ["eh1","embedded-hal-async"]}
+# Memory Management
+static_cell = { version = "^2.0", features = ["nightly"] }

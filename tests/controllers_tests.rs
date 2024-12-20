@@ -1,8 +1,10 @@
-/*use core::cell::RefCell;
+/*
+use core::cell::RefCell;
 use utils::controllers::{I2CDevices, WheelKinematics};
 
 mod mock_devices;
 use mock_devices::*;
+
 
 #[test]
 fn wheel_velocities() {
@@ -15,7 +17,7 @@ fn wheel_velocities() {
     assert!(w[0] > 3.0);
 }
 
-/*#[test]
+#[test]
 fn i2cdevices_init() {
     // Define only the initialization-related transactions
     let expectations = [
