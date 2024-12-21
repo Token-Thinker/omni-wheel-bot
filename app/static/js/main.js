@@ -2,27 +2,44 @@
 
 console.log("touchscreen is", VirtualJoystick.touchScreenAvailable() ? "available" : "not available");
 
-// Initialize WebSocket connection to Rust backend
-const socket = new WebSocket('ws://192.168.1.177:9001');
+let socket;
 
-// Handle connection events
-socket.onopen = () => {
-    console.log('WebSocket connection established');
-    updateStatus('Connected');
-};
+function initializeWebSocket() {
+    socket = new WebSocket('ws://192.168.1.177:9001');
 
-socket.onmessage = (event) => {
-    console.log('Message from server:', event.data);
-};
+    // Handle connection events
+    socket.onopen = () => {
+        console.log('WebSocket connection established');
+        updateConnectionStatus(true);
+    };
 
-socket.onerror = (error) => {
-    console.error('WebSocket error:', error);
-};
+    socket.onmessage = (event) => {
+        console.log('Message from server:', event.data);
+    };
 
-socket.onclose = () => {
-    console.log('WebSocket connection closed');
-    updateStatus('Disconnected');
-};
+    socket.onerror = (error) => {
+        console.error('WebSocket error:', error);
+        updateConnectionStatus(false);
+    };
+
+    socket.onclose = () => {
+        console.log('WebSocket connection closed');
+        updateConnectionStatus(false);
+        scheduleReconnect(); // Schedule a reconnect attempt
+    };
+}
+
+function scheduleReconnect() {
+    console.log('Attempting to reconnect in 5 seconds...');
+    setTimeout(() => {
+        if (socket.readyState === WebSocket.CLOSED) {
+            console.log('Reconnecting...');
+            initializeWebSocket();
+        }
+    }, 5000);
+}
+
+initializeWebSocket();
 
 // Initialize Left Joystick (Rotation)
 const leftJoystick = new VirtualJoystick({
@@ -123,6 +140,15 @@ function updateStatus(status) {
     }
 }
 
+function updateConnectionStatus(isConnected) {
+    const statusCircle = document.getElementById('connection-status');
+    if (isConnected) {
+    statusCircle.style.backgroundColor = 'green';
+    } else {
+    statusCircle.style.backgroundColor = 'red';
+    }
+  }
+
 setInterval(function(){
     var outputEl = document.getElementById('result');
     outputEl.innerHTML	= '<b>Result:</b> '
@@ -134,11 +160,9 @@ setInterval(function(){
 		+ (leftJoystick.down()	? ' down' 	: '')
 }, 1/30 * 1000);
 
+        document.addEventListener('touchmove', function(e) {
+            e.preventDefault();
+        }, { passive: false });
 
 
-
-
-// Optional: Adjust joystick positions on window resize
-window.addEventListener('resize', function(){
-    // Implement if necessary, e.g., reposition joysticks or adjust settings
 });

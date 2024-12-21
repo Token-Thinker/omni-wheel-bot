@@ -3,18 +3,23 @@
 <head>
     <meta charset="UTF-8">
     <title>Virtual Joystick Control</title>
+    <!-- Responsive Meta Tag to Disable Zooming and Set Viewport -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <style>
-    /* Ensure the body takes full height */
+
+        /* Ensure the page occupies the full viewport and prevent scrolling */
         html, body {
-            height: 100%;
+            width: 100vw;
+            height: 100vh;
             margin: 0;
             overflow: hidden; /* Prevent scrolling when using joystick */
             background-color: #f0f0f0; /* Optional: for visibility */
             position: relative;
+            font-family: Arial, sans-serif;
         }
 
-        /* Status Display */
-        #status {
+        /* Status Container Styling */
+        #status-container {
             position: absolute;
             top: 20px;
             left: 50%;
@@ -23,19 +28,59 @@
             color: white;
             padding: 10px 20px;
             border-radius: 5px;
+            display: flex;
+            align-items: center;
+            gap: 10px; /* Space between circle and text */
+            z-index: 1000; /* Ensure it stays on top */
+        }
+
+        /* Connection Status Indicator */
+        #connection-status {
+            width: 15px;
+            height: 15px;
+            border-radius: 50%;
+            background-color: red;
+            border: 2px solid white;
+        }
+
+        /* Results Display Styling */
+        #result-container {
+            position: absolute;
+            top: 60px;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: rgba(255, 255, 255, 0.8);
+            color: #333;
+            padding: 10px 20px;
+            border-radius: 5px;
             font-family: Arial, sans-serif;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+            z-index: 999; /* Ensure it stays above other elements if needed */
+        }
+
+        /* Optional: Hide scrollbars on mobile browsers */
+        /* For Webkit-based browsers */
+        ::-webkit-scrollbar {
+            display: none;
+        }
+
+        /* For Firefox */
+        body {
+            scrollbar-width: none;
         }
     </style>
 </head>
 <body>
-    <!-- Joystick Containers -->
-    <div id="left-joystick-container"></div>
-    <div id="right-joystick-container"></div>
+    <!-- Status Display with Connection Status -->
+    <div id="status-container">
+        <div id="connection-status"></div>
+        <span id="status">Status: Idle</span>
+    </div>
 
-    <!-- Optional: Status Display -->
-    <div id="status">Status: Idle</div>
-    <span id="result"></span>
-
+    <!-- Results Display -->
+    <div id="result-container">
+        <span id="result"></span>
+    </div>
 
     <!-- Include the VirtualJoystick.js script from the static folder -->
     <script src="{{ url_for('static', filename='js/virtualjoystick.js') }}"></script>
