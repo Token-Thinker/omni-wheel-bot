@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Virtual Joystick Control</title>
+    <style>
+    /* Ensure the body takes full height */
+        html, body {
+            height: 100%;
+            margin: 0;
+            overflow: hidden; /* Prevent scrolling when using joystick */
+            background-color: #f0f0f0; /* Optional: for visibility */
+            position: relative;
+        }
+
+        /* Status Display */
+        #status {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: rgba(0, 0, 0, 0.5);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 5px;
+            font-family: Arial, sans-serif;
+        }
+    </style>
+</head>
+<body>
+    <!-- Joystick Containers -->
+    <div id="left-joystick-container"></div>
+    <div id="right-joystick-container"></div>
+
+    <!-- Optional: Status Display -->
+    <div id="status">Status: Idle</div>
+    <span id="result"></span>
+
+
+    <!-- Include the VirtualJoystick.js script from the static folder -->
+    <script src="{{ url_for('static', filename='js/virtualjoystick.js') }}"></script>
+    <!-- Include your custom JavaScript -->
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>
