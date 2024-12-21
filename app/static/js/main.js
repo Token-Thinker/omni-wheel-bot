@@ -72,7 +72,7 @@ leftJoystick.addEventListener('touchEnd', function(){
 
 // Event Listener: Joystick moved
 leftJoystick.addEventListener('touchMove', function(){
-    const speed = leftJoystick.deltaY(); // Assuming deltaY controls rotation speed
+    const speed = calculateYawSpeed(leftJoystick.deltaX(), leftJoystick.deltaY());
     const orientation = null; // Optional parameter; set if needed
 
     console.log('Left Joystick moved:', speed);
@@ -110,9 +110,7 @@ rightJoystick.addEventListener('touchEnd', function(){
 
 // Event Listener: Joystick moved
 rightJoystick.addEventListener('touchMove', function(){
-    const direction = rightJoystick.deltaX();
-    const speed = rightJoystick.deltaY();
-
+    const { speed, direction } = calculateMove(rightJoystick.deltaX(), rightJoystick.deltaY(), 60);
     console.log('Right Joystick moved:', direction, speed);
 
     // Send Translation Command
@@ -149,20 +147,54 @@ function updateConnectionStatus(isConnected) {
     }
   }
 
-setInterval(function(){
+function calculateYawSpeed(deltaX, deltaY) {
+    // Calculate magnitude using Pythagorean theorem
+    const magnitude = Math.sqrt(deltaX ** 2 + deltaY ** 2);
+
+    // Normalize magnitude to range [0, 1]
+    const normalizedMagnitude = Math.min(1, magnitude / 120); // Assuming 120 is the max joystick radius
+
+    // Determine direction (sign) based on deltaX
+    const sign = deltaX >= 0 ? 1 : -1;
+
+    // Return signed normalized speed, capped between -1 and 1
+    return sign * normalizedMagnitude;
+}
+
+function calculateMove(deltaX, deltaY) {
+    // Calculate magnitude using Pythagorean theorem
+    const magnitude = Math.sqrt(deltaX ** 2 + deltaY ** 2);
+
+    // Normalize magnitude to range [-1, 1]
+    const normalizedMagnitude = Math.min(1, magnitude / 60);
+
+    // Calculate angle in degrees
+    const angle = Math.atan2(deltaY, deltaX) * (180 / Math.PI);
+
+    // Return capped magnitude and angle
+    return {
+        speed: normalizedMagnitude.toFixed(2),
+        direction: (angle < 0 ? angle + 360 : angle).toFixed(0) // Ensure angle is in range [0, 360]
+    };
+}
+
+setInterval(function() {
     var outputEl = document.getElementById('result');
-    outputEl.innerHTML	= '<b>Result:</b> '
-        + ' dx:'+leftJoystick.deltaX()
-		+ ' dy:'+leftJoystick.deltaY()
-		+ (leftJoystick.right()	? ' right'	: '')
-		+ (leftJoystick.up()	? ' up'		: '')
-		+ (leftJoystick.left()	? ' left'	: '')
-		+ (leftJoystick.down()	? ' down' 	: '')
-}, 1/30 * 1000);
+
+    const yawSpeed = calculateYawSpeed(leftJoystick.deltaX(), leftJoystick.deltaY());
+    const { speed, direction } = calculateMove(rightJoystick.deltaX(), rightJoystick.deltaY(), 60); // Adjust 60 if max radius differs
+
+
+    outputEl.innerHTML =
+        '<b>Yaw:</b> ' +
+        + yawSpeed.toFixed(2) + // Display signed magnitude
+        ' (Direction: ' + (yawSpeed > 0 ? 'Clockwise' : 'Counterclockwise') + ')' +
+        '<br>' + // Line break between joysticks
+        '<b>Move:</b> ' +
+        ' Speed:' + speed +
+        ' Direction:' + direction
+}, 1 / 30 * 1000);
 
         document.addEventListener('touchmove', function(e) {
             e.preventDefault();
         }, { passive: false });
-
-
-});
