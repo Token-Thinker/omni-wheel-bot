@@ -47,7 +47,7 @@ const leftJoystick = new VirtualJoystick({
     strokeStyle: 'cyan',
     limitStickTravel: true,
     stickRadius: 120,
-    mouseSupport: true
+    mouseSupport: false
 
 });
 
@@ -86,7 +86,9 @@ const rightJoystick = new VirtualJoystick({
     container: document.body,
     strokeStyle: 'orange',
     limitStickTravel: true,
-    stickRadius: 60,
+    stickRadius: 120,
+    mouseSupport: true
+
 });
 
 // Event Listener: Validate touch start (only right half)
@@ -110,7 +112,7 @@ rightJoystick.addEventListener('touchEnd', function(){
 
 // Event Listener: Joystick moved
 rightJoystick.addEventListener('touchMove', function(){
-    const { speed, direction } = calculateMove(rightJoystick.deltaX(), rightJoystick.deltaY(), 60);
+    const { speed, direction } = calculateMove(rightJoystick.deltaX(), rightJoystick.deltaY());
     console.log('Right Joystick moved:', direction, speed);
 
     // Send Translation Command
@@ -120,7 +122,7 @@ rightJoystick.addEventListener('touchMove', function(){
 // Function to send I2CCommand
 function sendI2CCommand(commandObj) {
     const jsonCommand = JSON.stringify(commandObj);
-    console.log('Attempting to send:', jsonCommand); // Log every attempt
+    console.log('Attempting to send:', jsonCommand);
 
     if (socket.readyState === WebSocket.OPEN) {
         socket.send(jsonCommand);
@@ -148,33 +150,25 @@ function updateConnectionStatus(isConnected) {
   }
 
 function calculateYawSpeed(deltaX, deltaY) {
-    // Calculate magnitude using Pythagorean theorem
     const magnitude = Math.sqrt(deltaX ** 2 + deltaY ** 2);
-
-    // Normalize magnitude to range [0, 1]
-    const normalizedMagnitude = Math.min(1, magnitude / 120); // Assuming 120 is the max joystick radius
-
-    // Determine direction (sign) based on deltaX
+    const normalizedMagnitude = Math.min(1, magnitude / 120);
     const sign = deltaX >= 0 ? 1 : -1;
+    const yawSpeed = sign * normalizedMagnitude;
 
-    // Return signed normalized speed, capped between -1 and 1
-    return sign * normalizedMagnitude;
+    return yawSpeed.toFixed(1);
 }
 
 function calculateMove(deltaX, deltaY) {
-    // Calculate magnitude using Pythagorean theorem
     const magnitude = Math.sqrt(deltaX ** 2 + deltaY ** 2);
+    const normalizedMagnitude = Math.min(1, magnitude / 120);
+    let angle = (Math.atan2(deltaY, deltaX) * (180 / Math.PI)) + 90;
+    angle = (angle + 360) % 360;
+    const speed = magnitude === 0 ? 0 : parseFloat(normalizedMagnitude.toFixed(2));
+    const direction = magnitude === 0 ? 0 : Math.round(angle);
 
-    // Normalize magnitude to range [-1, 1]
-    const normalizedMagnitude = Math.min(1, magnitude / 60);
-
-    // Calculate angle in degrees
-    const angle = Math.atan2(deltaY, deltaX) * (180 / Math.PI);
-
-    // Return capped magnitude and angle
     return {
-        speed: normalizedMagnitude.toFixed(2),
-        direction: (angle < 0 ? angle + 360 : angle).toFixed(0) // Ensure angle is in range [0, 360]
+        speed: speed,
+        direction: direction
     };
 }
 
@@ -182,19 +176,15 @@ setInterval(function() {
     var outputEl = document.getElementById('result');
 
     const yawSpeed = calculateYawSpeed(leftJoystick.deltaX(), leftJoystick.deltaY());
-    const { speed, direction } = calculateMove(rightJoystick.deltaX(), rightJoystick.deltaY(), 60); // Adjust 60 if max radius differs
+    const { speed, direction } = calculateMove(rightJoystick.deltaX(), rightJoystick.deltaY());
 
 
     outputEl.innerHTML =
         '<b>Yaw:</b> ' +
-        + yawSpeed.toFixed(2) + // Display signed magnitude
-        ' (Direction: ' + (yawSpeed > 0 ? 'Clockwise' : 'Counterclockwise') + ')' +
-        '<br>' + // Line break between joysticks
+        + yawSpeed +
+        ' (' + (yawSpeed > 0 ? 'Clockwise' : 'Counterclockwise') + ')' +
+        '<br>' +
         '<b>Move:</b> ' +
-        ' Speed:' + speed +
-        ' Direction:' + direction
+        ' (' + speed +
+        ' , ' + direction + ')'
 }, 1 / 30 * 1000);
-
-        document.addEventListener('touchmove', function(e) {
-            e.preventDefault();
-        }, { passive: false });
