@@ -6,6 +6,12 @@
     <!-- Responsive Meta Tag to Disable Zooming and Set Viewport -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <style>
+        /* CSS Reset */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
 
         html, body {
             width: 100vw;
@@ -18,20 +24,24 @@
             font-family: Arial, sans-serif;
         }
 
-        /* Status Container Styling */
-        #status-container {
+        /* Unified Info Container Styling */
+        #info-container {
             position: absolute;
             top: 20px;
             left: 50%;
             transform: translateX(-50%);
-            background-color: rgba(0, 0, 0, 0.5);
+            background-color: rgba(0, 0, 0, 0.6);
             color: white;
-            padding: 10px 20px;
-            border-radius: 5px;
+            padding: 8px 12px;
+            border-radius: 10px;
             display: flex;
             align-items: center;
-            gap: 10px; /* Space between circle and text */
-            z-index: 1000; /* Ensure it stays on top */
+            justify-content: space-between;
+            gap: 2px;
+            z-index: 1000;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+            width: 90%; /* Responsive width */
+            max-width: 175px; /* Max width for larger screens */
         }
 
         /* Connection Status Indicator */
@@ -43,22 +53,17 @@
             border: 2px solid white;
         }
 
-        /* Results Display Styling */
-        #result-container {
-            position: absolute;
-            top: 60px;
-            left: 50%;
-            transform: translateX(-50%);
-            background-color: rgba(255, 255, 255, 0.8);
-            color: #333;
-            padding: 10px 20px;
-            border-radius: 5px;
-            font-family: Arial, sans-serif;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
-            z-index: 999; /* Ensure it stays above other elements if needed */
+        /* Yaw and Move Number Styling */
+        .yaw {
+            color: cyan;
+            font-weight: bold;
         }
 
-        /* Optional: Hide scrollbars on mobile browsers */
+        .move {
+            color: orange;
+            font-weight: bold;
+        }
+
         /* For Webkit-based browsers */
         ::-webkit-scrollbar {
             display: none;
@@ -71,15 +76,11 @@
     </style>
 </head>
 <body>
-    <!-- Status Display with Connection Status -->
-    <div id="status-container">
+    <!-- Unified Info Display -->
+    <div id="info-container">
         <div id="connection-status"></div>
-        <span id="status">Status: Idle</span>
-    </div>
-
-    <!-- Results Display -->
-    <div id="result-container">
-        <span id="result"></span>
+        <span class="yaw">0.0</span>
+        <span class="move">(0.0, 0)</span>
     </div>
 
     <!-- Include the VirtualJoystick.js script from the static folder -->
