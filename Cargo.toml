@@ -10,12 +10,13 @@ resolver = "2"
 [dependencies]
 
 # ESP32 and Hardware Abstraction Layer
-esp-backtrace = { version = "0.14.2", features = ["esp32", "exception-handler", "println"] }
+esp-backtrace = { version = "0.14.2", features = ["esp32", "exception-handler", "println", "panic-handler"] }
 esp-hal = { version = "0.22.0", features = ["esp32"] }
 esp-println = { version = "0.12.0", features = ["esp32", "log"] }
 esp-hal-embassy = { version = "0.5.0", features = ["esp32"] }
 esp-wifi = { version = "0.11.0", features = ["esp32", "wifi", "utils"] }
 esp-alloc = { version = "0.5.0" }
+esp-hal-smartled = {version = "0.14.0", features = ["esp32"]}
 cfg-if = "1.0.0"
 
 # Embedded Frameworks
@@ -26,7 +27,7 @@ libm = "0.2.11"
 
 # Embassy Framework (Async Execution)
 embassy-time = { version = "^0.3", features = ["generic-queue"] }
-embassy-executor = { version = "^0.6" }
+embassy-executor = { version = "^0.6", features = ["task-arena-size-20480"] }
 embassy-net = { version = "0.4.0", features = ["proto-ipv4", "tcp", "udp", "dns", "medium-ethernet", "dhcpv4"] }
 embassy-sync = { version = "^0.6" }
 
@@ -48,3 +49,5 @@ micromath = { version = "2.1.0" }
 
 # Memory Management
 static_cell = { version = "^2.0", features = ["nightly"] }
+
+smart-leds-trait = {version = "0.3.0"}

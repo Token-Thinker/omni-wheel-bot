@@ -1,4 +1,5 @@
 use core::f32::consts::PI;
+
 use libm;
 use micromath::F32Ext;
 
@@ -6,26 +7,35 @@ use micromath::F32Ext;
 ///
 /// This structure models the geometric configuration and kinematic properties
 /// of a three-wheeled omni-wheel robot, including wheel positioning, robot
-/// size, and methods for computing velocities and constructing a Jacobian matrix.
-pub struct WheelKinematics {
+/// size, and methods for computing velocities and constructing a Jacobian
+/// matrix.
+pub struct WheelKinematics
+{
     /// Radius of each wheel in meters.
     wheel_radius: f32,
     /// Distance from the robot's center to each wheel in meters.
     robot_radius: f32,
-    /// Angular positions of the wheels in radians, measured counterclockwise from the x-axis.
+    /// Angular positions of the wheels in radians, measured counterclockwise
+    /// from the x-axis.
     wheel_angles: [f32; 3],
 }
 
-impl WheelKinematics {
+impl WheelKinematics
+{
     /// Creates a new `WheelKinematics` instance.
     ///
     /// # Parameters
     /// - `wheel_radius`: The radius of the robot's omni-wheels in meters.
-    /// - `robot_radius`: The distance from the robot's center to each wheel in meters.
+    /// - `robot_radius`: The distance from the robot's center to each wheel in
+    ///   meters.
     ///
     /// # Returns
     /// A new `WheelKinematics` instance with predefined wheel angles.
-    pub fn new(wheel_radius: f32, robot_radius: f32) -> Self {
+    pub fn new(
+        wheel_radius: f32,
+        robot_radius: f32,
+    ) -> Self
+    {
         let wheel_angles = [PI / 3.0, PI, 5.0 * PI / 3.0];
         Self {
             wheel_radius,
@@ -38,12 +48,20 @@ impl WheelKinematics {
     ///
     /// # Parameters
     /// - `speed`: Linear speed in meters per second.
-    /// - `angle`: Direction of movement in degrees, relative to the global frame.
-    /// - `orientation`: Robot's current orientation in degrees, relative to the global frame.
+    /// - `angle`: Direction of movement in degrees, relative to the global
+    ///   frame.
+    /// - `orientation`: Robot's current orientation in degrees, relative to the
+    ///   global frame.
     ///
     /// # Returns
-    /// A tuple `(vx, vy)` representing the velocity components in the robot's body frame.
-    pub fn convert_to_body_frame(speed: f32, angle: f32, orientation: f32) -> (f32, f32) {
+    /// A tuple `(vx, vy)` representing the velocity components in the robot's
+    /// body frame.
+    pub fn convert_to_body_frame(
+        speed: f32,
+        angle: f32,
+        orientation: f32,
+    ) -> (f32, f32)
+    {
         let angle_rad = angle * (PI / 180.0);
         let orientation_rad = orientation * (PI / 180.0);
 
@@ -65,8 +83,10 @@ impl WheelKinematics {
     /// ```
     ///
     /// # Returns
-    /// A 3x3 Jacobian matrix relating robot body-frame velocities to wheel velocities.
-    pub fn construct_jacobian(&self) -> [[f32; 3]; 3] {
+    /// A 3x3 Jacobian matrix relating robot body-frame velocities to wheel
+    /// velocities.
+    pub fn construct_jacobian(&self) -> [[f32; 3]; 3]
+    {
         let r = self.wheel_radius;
         let l = self.robot_radius;
 
@@ -79,24 +99,28 @@ impl WheelKinematics {
         j
     }
 
-    /// Computes the required wheel velocities based on the desired robot movement.
+    /// Computes the required wheel velocities based on the desired robot
+    /// movement.
     ///
     /// # Parameters
     /// - `speed`: Linear speed in meters per second.
     /// - `angle`: Movement direction in degrees, relative to the global frame.
-    /// - `orientation`: Robot's orientation in degrees, relative to the global frame.
+    /// - `orientation`: Robot's orientation in degrees, relative to the global
+    ///   frame.
     /// - `omega`: Angular velocity in radians per second.
     ///
     /// # Returns
-    /// An array of wheel velocities `[v1, v2, v3]`, where each value corresponds to the
-    /// rotational velocity of an individual wheel in radians per second.
+    /// An array of wheel velocities `[v1, v2, v3]`, where each value
+    /// corresponds to the rotational velocity of an individual wheel in
+    /// radians per second.
     pub fn compute_wheel_velocities(
         &self,
         speed: f32,
         angle: f32,
         orientation: f32,
         omega: f32,
-    ) -> [f32; 3] {
+    ) -> [f32; 3]
+    {
         let (v_bx, v_by) = Self::convert_to_body_frame(speed, angle, orientation);
         let v = [v_bx, v_by, omega];
         let j = self.construct_jacobian();
@@ -104,10 +128,15 @@ impl WheelKinematics {
         let mut wheel_velocities = [0.0_f32; 3];
 
         /// Clamps near-zero values to zero to reduce numerical noise.
-        fn clamp_small(value: f32, epsilon: f32) -> f32 {
+        fn clamp_small(
+            value: f32,
+            epsilon: f32,
+        ) -> f32
+        {
             if value.abs() < epsilon {
                 0.0
-            } else {
+            }
+            else {
                 value
             }
         }

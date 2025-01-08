@@ -17,8 +17,8 @@ console.log(
 );
 
 // WebSocket Configuration
-const WS_URL = 'ws://192.168.1.161:9001';
-const RECONNECT_INTERVAL = 5000; // 5 seconds
+const WS_URL = 'ws://192.168.1.194:88/ws';
+const RECONNECT_INTERVAL = 15000; // 5 seconds
 const SEND_INTERVAL = 1000 / 30; // ~30Hz
 
 // =======================================
@@ -32,7 +32,7 @@ class WebSocketManager {
   }
 
   initializeWebSocket() {
-    this.socket = new WebSocket(this.url);
+    this.socket = new WebSocket(this.url, ["messages"]);
 
     this.socket.onopen = () => {
       console.log('WebSocket connection established');
@@ -152,7 +152,9 @@ class JoystickController {
   }
 }
 
+// =======================================
 // Left Joystick: Rotation
+// =======================================
 class LeftJoystick extends JoystickController {
   constructor() {
     super({
@@ -176,7 +178,12 @@ class LeftJoystick extends JoystickController {
     // If we were actually dragging, then send stop command
     if (this.dragging) {
       console.log('Left Joystick Ended');
-      wsManager.sendCommand({ Y: { s: 0, o: null } });
+      wsManager.sendCommand({
+        ct: "i",
+        ic: "y",
+        s: 0,
+        o: null
+      });
     }
   }
 
@@ -184,12 +191,19 @@ class LeftJoystick extends JoystickController {
     const speed = parseFloat(
       calculateYawSpeed(this.joystick.deltaX(), this.joystick.deltaY())
     );
-    const orientation = null; // Optional parameter
-    return { Y: { s: speed, o: orientation } };
+    const orientation = null; // optional
+    return {
+      ct: "i",
+      ic: "y",
+      s: speed,
+      o: orientation
+    };
   }
 }
 
+// =======================================
 // Right Joystick: Translation/Strafe
+// =======================================
 class RightJoystick extends JoystickController {
   constructor() {
     super({
@@ -213,7 +227,12 @@ class RightJoystick extends JoystickController {
     // If we were actually dragging, then send stop command
     if (this.dragging) {
       console.log('Right Joystick Ended');
-      wsManager.sendCommand({ T: { d: 0, s: 0 } });
+      wsManager.sendCommand({
+        ct: "i",
+        ic: "t",
+        d: 0,
+        s: 0
+      });
     }
   }
 
@@ -222,7 +241,12 @@ class RightJoystick extends JoystickController {
       this.joystick.deltaX(),
       this.joystick.deltaY()
     );
-    return { T: { d: direction, s: speed } };
+    return {
+      ct: "i",
+      ic: "t",
+      d: direction,
+      s: speed
+    };
   }
 }
 
@@ -253,51 +277,48 @@ function calculateMove(deltaX, deltaY) {
 // =======================================
 // Command Sending Logic
 // =======================================
+
+// We'll keep track of previous commands so we don't spam the server
 let previousYCommand = { s: null, o: null };
 let previousTCommand = { d: null, s: null };
 
-// Select the yaw and move elements
+// Select the yaw and move elements for display
 const yawEl = document.querySelector('.yaw');
 const moveEl = document.querySelector('.move');
 
+// Send commands ~30x/sec
 setInterval(() => {
-  // Get current commands
-  const yawCommand = leftJoystick.getCommand().Y;
-  const moveCommand = rightJoystick.getCommand().T;
+  // 1) Get current commands from each joystick
+  //    Left => rotation
+  //    Right => translation
+  const currentY = leftJoystick.getCommand();  // { ct, ic, s, o }
+  const currentT = rightJoystick.getCommand(); // { ct, ic, d, s }
 
-  // Debug
-  console.log('Yaw Command:', yawCommand);
-  console.log('Move Command:', moveCommand);
 
-  // Extract values with safety checks
-  const yawSpeed = parseFloat(yawCommand.s);
-  const direction = (moveCommand && moveCommand.d !== undefined) ? moveCommand.d : 0;
-  const speed = (moveCommand && moveCommand.s !== undefined) ? moveCommand.s : 0;
+  // Update UI elements, if they exist
+  if (yawEl) yawEl.textContent = currentY.s;
+  if (moveEl) moveEl.textContent = `(${currentT.s}, ${currentT.d})`;
 
-  // Update UI
-  if (yawEl) yawEl.textContent = yawSpeed;
-  if (moveEl) moveEl.textContent = `(${speed}, ${direction})`;
-
-  // Prepare Y and T commands
-  const currentYCommand = { s: yawSpeed, o: null };
-  const currentTCommand = { d: direction, s: speed };
-
-  // Check if Y command has changed
+  // 2) Check if the Y command changed before sending
+  //    (compare currentY.s/o to previousYCommand.s/o)
   if (
-    currentYCommand.s !== previousYCommand.s ||
-    currentYCommand.o !== previousYCommand.o
+    currentY.s !== previousYCommand.s ||
+    currentY.o !== previousYCommand.o
   ) {
-    wsManager.sendCommand({ Y: currentYCommand });
-    previousYCommand = { ...currentYCommand };
+    wsManager.sendCommand(currentY);
+    previousYCommand = { ...currentY };
+    console.log('Yaw Command:', currentY);
   }
 
-  // Check if T command has changed
+  // 3) Check if the T command changed before sending
+  //    (compare currentT.s/d to previousTCommand.s/d)
   if (
-    currentTCommand.d !== previousTCommand.d ||
-    currentTCommand.s !== previousTCommand.s
+    currentT.d !== previousTCommand.d ||
+    currentT.s !== previousTCommand.s
   ) {
-    wsManager.sendCommand({ T: currentTCommand });
-    previousTCommand = { ...currentTCommand };
+    wsManager.sendCommand(currentT);
+    previousTCommand = { ...currentT };
+    console.log('Move Command:', currentT);
   }
 }, SEND_INTERVAL);
 
@@ -312,6 +333,7 @@ const MOVE_THRESHOLD = 20;          // px movement allowed before ignoring tap
 
 let lastTapTimeLeft = 0;
 let lastTapTimeRight = 0;
+let isLightsOn = false;
 
 // For the current touch
 let startX = 0;
@@ -337,16 +359,16 @@ function onGlobalTouchStart(event) {
   touchSide = (touch.pageX < window.innerWidth / 2) ? 'left' : 'right';
 
   // Start a timer for long press => power toggle
-longPressTimer = setTimeout(() => {
-  if (touchSide === 'left') {
-    console.log('Long press on LEFT => toggling power (left)!');
-    wsManager.sendCommand({ POWER_LEFT: 'TOGGLE' });
-  } else {
-    console.log('Long press on RIGHT => toggling power (right)!');
-    wsManager.sendCommand({ POWER_RIGHT: 'TOGGLE' });
-  }
-  longPressTimer = null; // reset
-}, LONG_PRESS_THRESHOLD);
+  longPressTimer = setTimeout(() => {
+    if (touchSide === 'left') {
+      console.log('Long press on LEFT => toggling power (left)!');
+      wsManager.sendCommand({ POWER_LEFT: 'TOGGLE' });
+    } else {
+      console.log('Long press on RIGHT => toggling power (right)!');
+      wsManager.sendCommand({ POWER_RIGHT: 'TOGGLE' });
+    }
+    longPressTimer = null; // reset
+  }, LONG_PRESS_THRESHOLD);
 }
 
 /** onGlobalTouchMove */
@@ -386,8 +408,24 @@ function onGlobalTouchEnd(event) {
   if (touchSide === 'left') {
     // Check if within double-tap threshold
     if (now - lastTapTimeLeft < DOUBLE_TAP_THRESHOLD) {
-      console.log('Double tap on LEFT side!');
-      wsManager.sendCommand({ LIGHTS_LEFT: 'TOGGLE' });
+      console.log('Double tap on LEFT side! Toggling LED...');
+
+      // Toggle logic
+      if (isLightsOn) {
+        // Turn LEDs off
+        wsManager.sendCommand({
+          ct: "l",
+          lc: "off"
+        });
+        isLightsOn = false;
+      } else {
+        // Turn LEDs on
+        wsManager.sendCommand({
+          ct: "l",
+          lc: "on"
+        });
+        isLightsOn = true;
+      }
       lastTapTimeLeft = 0; // reset
     } else {
       lastTapTimeLeft = now;

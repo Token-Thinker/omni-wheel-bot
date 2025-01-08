@@ -4,7 +4,8 @@
 //!
 //! # Modules
 //! - `connection`: Manages network connections and communication protocols.
-//! - `controllers`: Handles hardware control logic, including motor and sensor management.
+//! - `controllers`: Handles hardware control logic, including motor and sensor
+//!   management.
 
 /// Module for managing network connections and communication protocols.
 pub(crate) mod connection;

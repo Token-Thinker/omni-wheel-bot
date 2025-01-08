@@ -1,8 +1,9 @@
 //! WebSocket Server Module
 //!
-//! This module defines the WebSocket server implementation using the `picoserve` framework.
-//! It manages incoming WebSocket connections, processes I2C commands, and communicates with
-//! the embedded control system through a channel interface.
+//! This module defines the WebSocket server implementation using the
+//! `picoserve` framework. It manages incoming WebSocket connections, processes
+//! I2C commands, and communicates with the embedded control system through a
+//! channel interface.
 //!
 //! # Components
 //! - `run`: Starts the WebSocket server.
@@ -14,11 +15,17 @@ use embassy_time::Duration;
 use picoserve::{
     io::embedded_io_async as embedded_aio,
     response::ws::{
-        Message, ReadMessageError, SocketRx, SocketTx, WebSocketCallback, WebSocketUpgrade,
+        Message,
+        ReadMessageError,
+        SocketRx,
+        SocketTx,
+        WebSocketCallback,
+        WebSocketUpgrade,
     },
     Router,
 };
-use crate::utils::controllers::{I2CCommand, CHANNEL};
+use picoserve::response::StatusCode;
+use crate::utils::controllers::{SystemCommand, I2C_CHANNEL, LED_CHANNEL};
 
 /// Starts the WebSocket server with the provided configuration.
 ///
@@ -35,7 +42,8 @@ pub async fn run<Driver: NetworkDriver>(
     port: u16,
     stack: &'static Stack<Driver>,
     config: Option<&'static picoserve::Config<Duration>>,
-) -> ! {
+) -> !
+{
     let default_config = picoserve::Config::new(picoserve::Timeouts {
         start_read_request: Some(Duration::from_secs(5)),
         read_request: Some(Duration::from_secs(1)),
@@ -44,10 +52,41 @@ pub async fn run<Driver: NetworkDriver>(
 
     let config = config.unwrap_or(&default_config);
 
-    let router = Router::new().route(
+    let router = Router::new()
+        .route("/",
+               picoserve::routing::get(|| async {
+                   picoserve::response::Response::new(StatusCode::OK, "Hello World").
+                       with_header("Content-Type", "text/plain")
+               })
+        )
+
+        .route(
         "/ws",
-        picoserve::routing::get(|upgrade: WebSocketUpgrade| upgrade.on_upgrade(WebSocket)),
-    );
+        picoserve::routing::get(|upgrade: WebSocketUpgrade| {
+            if let Some(protocols) = upgrade.protocols() {
+                for protocol in protocols {
+                    tracing::info!("Client offered protocol: {}", protocol);
+                }
+            }
+            upgrade
+                .on_upgrade(WebSocket)
+                .with_protocol("messages")
+                }),
+            );
+
+
+    // Print out the IP and port before starting the server.
+    if let Some(ip_cfg) = stack.config_v4() {
+        tracing::info!(
+            "Starting WebSocket server at ws://{}:{}/ws",
+            ip_cfg.address,
+            port
+        );
+    } else {
+        tracing::warn!(
+            "Starting WebSocket server on port {port}, but no IPv4 address is assigned yet!"
+        );
+    }
 
     let (mut rx_buffer, mut tx_buffer, mut http_buffer) = ([0; 1024], [0; 1024], [0; 256]);
 
@@ -61,14 +100,15 @@ pub async fn run<Driver: NetworkDriver>(
         &mut tx_buffer,
         &mut http_buffer,
     )
-        .await
+    .await
 }
 
 /// Manages timeouts for the WebSocket server.
 pub struct ServerTimer;
 
 #[allow(unused_qualifications)]
-impl picoserve::Timer for ServerTimer {
+impl picoserve::Timer for ServerTimer
+{
     type Duration = embassy_time::Duration;
     type TimeoutError = embassy_time::TimeoutError;
 
@@ -77,7 +117,8 @@ impl picoserve::Timer for ServerTimer {
         &mut self,
         duration: Self::Duration,
         future: F,
-    ) -> Result<F::Output, Self::TimeoutError> {
+    ) -> Result<F::Output, Self::TimeoutError>
+    {
         embassy_time::with_timeout(duration, future).await
     }
 }
@@ -85,7 +126,8 @@ impl picoserve::Timer for ServerTimer {
 /// Handles incoming WebSocket connections.
 pub struct WebSocket;
 
-impl WebSocketCallback for WebSocket {
+impl WebSocketCallback for WebSocket
+{
     async fn run<Reader, Writer>(
         self,
         mut rx: SocketRx<Reader>,
@@ -97,6 +139,8 @@ impl WebSocketCallback for WebSocket {
     {
         let mut buffer = [0; 1024];
 
+        tx.send_text("Connected").await?;
+
         let close_reason = loop {
             match rx.next_message(&mut buffer).await {
                 Ok(Message::Pong(_)) => continue,
@@ -105,23 +149,33 @@ impl WebSocketCallback for WebSocket {
                     tracing::info!(?reason, "websocket closed");
                     break None;
                 }
-                Ok(Message::Text(data)) => {
-                    match serde_json::from_str::<I2CCommand>(data) {
-                        Ok(message) => {
-                            CHANNEL.send(message).await;
-                            tx.send_text(data).await?
-                        }
-                        Err(error) => {
-                            tracing::error!(?error, "error deserializing incoming message")
-                        }
+                Ok(Message::Text(data)) => match serde_json::from_str::<SystemCommand>(data) {
+                    Ok(SystemCommand::I(i2c_cmd)) => {
+                        I2C_CHANNEL.send(i2c_cmd).await;
+                        tx.send_text("I2C command received and forwarded").await?;
                     }
-                }
-                Ok(Message::Binary(data)) => match serde_json::from_slice::<I2CCommand>(data) {
-                    Ok(message) => {
-                        CHANNEL.send(message).await;
-                        tx.send_binary(data).await?
+                    Ok(SystemCommand::L(led_cmd)) => {
+                        LED_CHANNEL.send(led_cmd).await;
+                        tx.send_text("LED command received and forwarded").await?;
                     }
-                    Err(error) => tracing::error!(?error, "error deserializing incoming message"),
+                    Err(error) => {
+                        tracing::error!(?error, "error deserializing SystemCommand");
+                        tx.send_text("Invalid command format").await?
+                    }
+                },
+                Ok(Message::Binary(data)) => match serde_json::from_slice::<SystemCommand>(data) {
+                    Ok(SystemCommand::I(i2c_cmd)) => {
+                        I2C_CHANNEL.send(i2c_cmd).await;
+                        tx.send_binary(b"I2C command received and forwarded").await?
+                    }
+                    Ok(SystemCommand::L(led_cmd)) => {
+                        LED_CHANNEL.send(led_cmd).await;
+                        tx.send_binary(b"LED command received and forwarded").await?
+                    }
+                    Err(error) => {
+                        tracing::error!(?error, "error deserializing incoming message");
+                        tx.send_binary(b"Invalid command format").await?
+                    }
                 },
                 Err(error) => {
                     tracing::error!(?error, "websocket error");
