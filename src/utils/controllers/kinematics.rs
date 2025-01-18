@@ -1,7 +1,6 @@
 use core::f32::consts::PI;
 
 use libm;
-use micromath::F32Ext;
 
 /// Represents the kinematics of an omni-wheel robot.
 ///

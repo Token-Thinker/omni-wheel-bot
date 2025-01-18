@@ -14,7 +14,6 @@ use icm42670::{
     Icm42670,
     PowerMode,
 };
-use micromath::F32Ext;
 use pwm_pca9685::{Address as PwmAddress, Channel, Error as PwmError, Pca9685};
 use serde::{Deserialize, Serialize};
 

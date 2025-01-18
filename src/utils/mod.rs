@@ -12,3 +12,5 @@ pub(crate) mod connection;
 
 /// Module for handling hardware controllers, such as motors and sensors.
 pub(crate) mod controllers;
+
+pub(crate) mod packages;

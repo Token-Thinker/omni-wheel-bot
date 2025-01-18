@@ -10,7 +10,7 @@
 //! - `ServerTimer`: Manages async timeouts.
 //! - `WebSocket`: Defines WebSocket behavior for handling client messages.
 
-use embassy_net::{driver::Driver as NetworkDriver, Stack};
+use embassy_net::Stack;
 use embassy_time::Duration;
 use picoserve::{
     io::embedded_io_async as embedded_aio,
@@ -24,7 +24,6 @@ use picoserve::{
     },
     Router,
 };
-use picoserve::response::StatusCode;
 use crate::utils::controllers::{SystemCommand, I2C_CHANNEL, LED_CHANNEL};
 
 /// Starts the WebSocket server with the provided configuration.
@@ -37,10 +36,10 @@ use crate::utils::controllers::{SystemCommand, I2C_CHANNEL, LED_CHANNEL};
 ///
 /// # Returns
 /// This function runs indefinitely.
-pub async fn run<Driver: NetworkDriver>(
+pub async fn run(
     id: usize,
     port: u16,
-    stack: &'static Stack<Driver>,
+    stack: Stack<'static>,
     config: Option<&'static picoserve::Config<Duration>>,
 ) -> !
 {
@@ -54,31 +53,31 @@ pub async fn run<Driver: NetworkDriver>(
 
     let router = Router::new()
         .route("/",
-               picoserve::routing::get(|| async {
-                   picoserve::response::Response::new(StatusCode::OK, "Hello World").
-                       with_header("Content-Type", "text/plain")
-               })
+               picoserve::routing::get_service(picoserve::response::File::html(include_str!("../../app/index.html"))),
+        )
+        .route(
+            "/main.js",
+            picoserve::routing::get_service(picoserve::response::File::javascript(include_str!("../../app/static/js/main.js"))),
+        )
+        .route(
+            "/virtualjoystick.js",
+            picoserve::routing::get_service(picoserve::response::File::javascript(include_str!(
+                "../../app/static/js/virtualjoystick.js"
+            ))),
         )
 
         .route(
         "/ws",
         picoserve::routing::get(|upgrade: WebSocketUpgrade| {
-            if let Some(protocols) = upgrade.protocols() {
-                for protocol in protocols {
-                    tracing::info!("Client offered protocol: {}", protocol);
-                }
-            }
-            upgrade
-                .on_upgrade(WebSocket)
-                .with_protocol("messages")
-                }),
-            );
+            upgrade.on_upgrade(WebSocket).with_protocol("messages")
+            }),
+        );
 
 
     // Print out the IP and port before starting the server.
     if let Some(ip_cfg) = stack.config_v4() {
         tracing::info!(
-            "Starting WebSocket server at ws://{}:{}/ws",
+            "Starting server at {}:{}",
             ip_cfg.address,
             port
         );

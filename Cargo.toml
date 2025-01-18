@@ -10,44 +10,43 @@ resolver = "2"
 [dependencies]
 
 # ESP32 and Hardware Abstraction Layer
-esp-backtrace = { version = "0.14.2", features = ["esp32", "exception-handler", "println", "panic-handler"] }
-esp-hal = { version = "0.22.0", features = ["esp32"] }
-esp-println = { version = "0.12.0", features = ["esp32", "log"] }
-esp-hal-embassy = { version = "0.5.0", features = ["esp32"] }
-esp-wifi = { version = "0.11.0", features = ["esp32", "wifi", "utils"] }
-esp-alloc = { version = "0.5.0" }
-esp-hal-smartled = {version = "0.14.0", features = ["esp32"]}
-cfg-if = "1.0.0"
+esp-backtrace = { version = "0.15.0", features = ["esp32", "exception-handler", "println", "panic-handler"] }
+esp-hal = { version = "0.23.1", features = ["esp32"] }
+esp-println = { version = "0.13.0", features = ["esp32", "log"] }
+esp-hal-embassy = { version = "0.6.0", features = ["esp32"] }
+esp-wifi = { version = "0.12.0", features = ["esp32", "wifi", "utils"] }
+esp-alloc = { version = "0.6.0" }
 
 # Embedded Frameworks
-embedded-hal = { version = "^1.0" }
+embedded-hal = { version = "1.0" }
 embedded-hal-bus = { version = "0.2.0", features = ["async"] }
-embedded-io-async = { version = "^0.6" }
-libm = "0.2.11"
+embedded-io-async = { version = "0.6" }
+libm = { version = "0.2.11" }
 
-# Embassy Framework (Async Execution)
-embassy-time = { version = "^0.3", features = ["generic-queue"] }
-embassy-executor = { version = "^0.6", features = ["task-arena-size-20480"] }
-embassy-net = { version = "0.4.0", features = ["proto-ipv4", "tcp", "udp", "dns", "medium-ethernet", "dhcpv4"] }
-embassy-sync = { version = "^0.6" }
+# Embassy Framework
+embassy-time = { version = "0.4.0" }
+embassy-executor = { version = "0.7.0", features = ["task-arena-size-20480"] }
+embassy-net = { version = "0.6.0", features = ["proto-ipv4", "tcp", "udp", "dhcpv4"] }
+embassy-sync = { version = "0.6" }
 
 # Logging and Debugging
-log = { version = "0.4.22" }
-tracing = { version = "^0.1", default-features = false, features = ["log", "attributes"] }
+log = { version = "0.4" }
+tracing = { version = "0.1", default-features = false, features = ["log", "attributes"] }
 
 # Serialization
-serde = { version = "^1", default-features = false, features = ["derive"] }
-serde_json = { version = "^1", features = ["alloc"], default-features = false }
+serde = { version = "1", default-features = false, features = ["derive"] }
+serde_json = { version = "1", features = ["alloc"], default-features = false }
 
 # I2C Drivers and Devices
-pwm-pca9685 = "1.0.0"
-icm42670 = "0.2.0"
+pwm-pca9685 = { version = "1.0.0" }
+icm42670 = { version = "0.2.0" }
+smart-leds-trait = {version = "0.3.0"}
 
 # Communications and Utilities
-picoserve = { version = "^0.12", features = ["embassy"] }
-micromath = { version = "2.1.0" }
+picoserve = { version = "0.13.3", features = ["embassy"] }
 
 # Memory Management
-static_cell = { version = "^2.0", features = ["nightly"] }
+static_cell = { version = "2.0", features = ["nightly"] }
 
-smart-leds-trait = {version = "0.3.0"}
+[patch.crates-io]
+picoserve = { git = "https://github.com/sammhicks/picoserve.git", rev = "c4fe40eccfcd1188f117d4b7c689f6dc48c94d44" }

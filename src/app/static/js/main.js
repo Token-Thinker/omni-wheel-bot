@@ -3,7 +3,6 @@
 // (You can place this in your main CSS file, too)
 document.addEventListener('DOMContentLoaded', () => {
   document.body.style.userSelect = 'none';           // Standard
-  document.body.style.webkitUserSelect = 'none';     // Chrome/Safari
   document.body.style.MozUserSelect = 'none';        // Firefox
   document.body.style.msUserSelect = 'none';         // IE/Edge
 });
@@ -17,9 +16,17 @@ console.log(
 );
 
 // WebSocket Configuration
-const WS_URL = 'ws://192.168.1.194:88/ws';
+const currentPath = window.location.pathname;
+
+let WS_URL = (window.location.protocol === "https:") ? "wss:" : "ws:";
+WS_URL += "//" + window.location.host;
+WS_URL += currentPath.slice(0, currentPath.lastIndexOf("/") + 1) + "ws";
+
 const RECONNECT_INTERVAL = 15000; // 5 seconds
 const SEND_INTERVAL = 1000 / 30; // ~30Hz
+
+
+
 
 // =======================================
 // WebSocket Management
