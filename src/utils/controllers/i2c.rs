@@ -9,12 +9,8 @@ use embedded_hal::i2c::I2c;
 use embedded_hal_bus::i2c::RefCellDevice;
 use icm42670::{
     accelerometer::{Accelerometer, Error as AccelerometerError},
-    Address as ImuAddress,
-    Error as ImuError,
-    Icm42670,
-    PowerMode,
+    Address as ImuAddress, Error as ImuError, Icm42670, PowerMode,
 };
-use micromath::F32Ext;
 use pwm_pca9685::{Address as PwmAddress, Channel, Error as PwmError, Pca9685};
 use serde::{Deserialize, Serialize};
 
@@ -26,8 +22,7 @@ pub static I2C_CHANNEL: embassy_sync::channel::Channel<CriticalSectionRawMutex, 
 
 /// Represents possible device-related errors.
 #[derive(Debug)]
-pub enum DeviceError<E: core::fmt::Debug>
-{
+pub enum DeviceError<E: core::fmt::Debug> {
     PwmError(PwmError<E>),
     ImuError(ImuError<E>),
     AccelError(AccelerometerError<ImuError<E>>),
@@ -36,22 +31,14 @@ pub enum DeviceError<E: core::fmt::Debug>
 /// Unified command structure for I2C operations.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "ic", rename_all = "snake_case")] // ic = 12c command
-pub enum I2CCommand
-{
+pub enum I2CCommand {
     // Motion Control Variants
     /// Omnidirectional translation (no rotation).
-    T
-    {
-        d: f32, s: f32
-    },
+    T { d: f32, s: f32 },
     /// Pure rotation in place (yaw).
-    Y
-    {
-        s: f32, o: Option<f32>
-    },
+    Y { s: f32, o: Option<f32> },
     /// Combined translational and rotational command.
-    O
-    {
+    O {
         d: f32,
         s: f32,
         rs: f32,
@@ -68,8 +55,7 @@ pub enum I2CCommand
 }
 
 /// Manages I2C devices including PWM motor controller and IMU.
-pub struct I2CDevices<'a, I2C>
-{
+pub struct I2CDevices<'a, I2C> {
     i2c: &'a RefCell<I2C>,
     pwm: Pca9685<RefCellDevice<'a, I2C>>,
     imu: Icm42670<RefCellDevice<'a, I2C>>,
@@ -87,8 +73,7 @@ where
         i2c: &'a RefCell<I2C>,
         wheel_radius: f32,
         robot_radius: f32,
-    ) -> Result<Self, DeviceError<E>>
-    {
+    ) -> Result<Self, DeviceError<E>> {
         let imu = Icm42670::new(RefCellDevice::new(i2c), ImuAddress::Primary)
             .map_err(DeviceError::ImuError)?;
         let mut pwm = Pca9685::new(RefCellDevice::new(i2c), PwmAddress::default())
@@ -116,8 +101,7 @@ where
     pub fn execute_command(
         &mut self,
         command: I2CCommand,
-    ) -> Result<Option<((f32, f32, f32), (f32, f32, f32), f32)>, DeviceError<E>>
-    {
+    ) -> Result<Option<((f32, f32, f32), (f32, f32, f32), f32)>, DeviceError<E>> {
         match command {
             I2CCommand::T { d, s } => {
                 self.set_motor_velocities_strafe(d, s)?;
@@ -153,8 +137,7 @@ where
         &mut self,
         direction: f32,
         speed: f32,
-    ) -> Result<(), DeviceError<E>>
-    {
+    ) -> Result<(), DeviceError<E>> {
         let wheel_speeds = self
             .kinematics
             .compute_wheel_velocities(speed, direction, 0.0, 0.0);
@@ -166,8 +149,7 @@ where
         &mut self,
         speed: f32,
         orientation: Option<f32>,
-    ) -> Result<(), DeviceError<E>>
-    {
+    ) -> Result<(), DeviceError<E>> {
         let new_orientation = (orientation.unwrap_or(0.0) + speed) % 360.0;
         let wheel_speeds =
             self.kinematics
@@ -179,8 +161,7 @@ where
     fn apply_wheel_speeds(
         &mut self,
         wheel_speeds: &[f32],
-    ) -> Result<(), DeviceError<E>>
-    {
+    ) -> Result<(), DeviceError<E>> {
         const MAX_DUTY: u16 = 4095;
 
         for (i, &(phase_channel, enable_channel)) in self.motor_channels.iter().enumerate() {
@@ -198,8 +179,7 @@ where
     }
 
     /// Reads IMU sensor data.
-    pub fn read_imu(&mut self) -> Result<((f32, f32, f32), (f32, f32, f32), f32), DeviceError<E>>
-    {
+    pub fn read_imu(&mut self) -> Result<((f32, f32, f32), (f32, f32, f32), f32), DeviceError<E>> {
         let accel = self.imu.accel_norm().map_err(DeviceError::AccelError)?;
         let gyro = self.imu.gyro_norm().map_err(DeviceError::ImuError)?;
         let temp = self.imu.temperature().map_err(DeviceError::ImuError)?;
@@ -207,8 +187,7 @@ where
     }
 
     /// Enables both PWM and IMU devices.
-    pub fn enable(&mut self) -> Result<(), DeviceError<E>>
-    {
+    pub fn enable(&mut self) -> Result<(), DeviceError<E>> {
         self.pwm.enable().map_err(DeviceError::PwmError)?;
         self.imu
             .set_power_mode(PowerMode::SixAxisLowNoise)
@@ -216,8 +195,7 @@ where
     }
 
     /// Disables both PWM and IMU devices.
-    pub fn disable(&mut self) -> Result<(), DeviceError<E>>
-    {
+    pub fn disable(&mut self) -> Result<(), DeviceError<E>> {
         self.pwm.disable().map_err(DeviceError::PwmError)?;
         self.imu
             .set_power_mode(PowerMode::Sleep)

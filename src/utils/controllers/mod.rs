@@ -10,20 +10,19 @@
 /// Module for managing I2C-connected devices.
 pub(crate) mod i2c;
 
-pub(crate) mod leds;
 /// Module for handling wheel kinematics calculations.
 pub mod kinematics;
+pub(crate) mod leds;
 
 // Re-export for easier access
 pub use i2c::*;
+pub use kinematics::*;
 pub use leds::*;
 use serde::{Deserialize, Serialize};
-pub use kinematics::*;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "ct", rename_all = "snake_case")] // ct = command type
-pub enum SystemCommand
-{
+pub enum SystemCommand {
     I(I2CCommand),
 
     L(LEDCommand),

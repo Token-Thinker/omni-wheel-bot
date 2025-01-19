@@ -1,7 +1,6 @@
 use core::f32::consts::PI;
 
 use libm;
-use micromath::F32Ext;
 
 /// Represents the kinematics of an omni-wheel robot.
 ///
@@ -9,8 +8,7 @@ use micromath::F32Ext;
 /// of a three-wheeled omni-wheel robot, including wheel positioning, robot
 /// size, and methods for computing velocities and constructing a Jacobian
 /// matrix.
-pub struct WheelKinematics
-{
+pub struct WheelKinematics {
     /// Radius of each wheel in meters.
     wheel_radius: f32,
     /// Distance from the robot's center to each wheel in meters.
@@ -20,8 +18,7 @@ pub struct WheelKinematics
     wheel_angles: [f32; 3],
 }
 
-impl WheelKinematics
-{
+impl WheelKinematics {
     /// Creates a new `WheelKinematics` instance.
     ///
     /// # Parameters
@@ -34,8 +31,7 @@ impl WheelKinematics
     pub fn new(
         wheel_radius: f32,
         robot_radius: f32,
-    ) -> Self
-    {
+    ) -> Self {
         let wheel_angles = [PI / 3.0, PI, 5.0 * PI / 3.0];
         Self {
             wheel_radius,
@@ -60,8 +56,7 @@ impl WheelKinematics
         speed: f32,
         angle: f32,
         orientation: f32,
-    ) -> (f32, f32)
-    {
+    ) -> (f32, f32) {
         let angle_rad = angle * (PI / 180.0);
         let orientation_rad = orientation * (PI / 180.0);
 
@@ -85,8 +80,7 @@ impl WheelKinematics
     /// # Returns
     /// A 3x3 Jacobian matrix relating robot body-frame velocities to wheel
     /// velocities.
-    pub fn construct_jacobian(&self) -> [[f32; 3]; 3]
-    {
+    pub fn construct_jacobian(&self) -> [[f32; 3]; 3] {
         let r = self.wheel_radius;
         let l = self.robot_radius;
 
@@ -119,8 +113,7 @@ impl WheelKinematics
         angle: f32,
         orientation: f32,
         omega: f32,
-    ) -> [f32; 3]
-    {
+    ) -> [f32; 3] {
         let (v_bx, v_by) = Self::convert_to_body_frame(speed, angle, orientation);
         let v = [v_bx, v_by, omega];
         let j = self.construct_jacobian();
@@ -131,12 +124,10 @@ impl WheelKinematics
         fn clamp_small(
             value: f32,
             epsilon: f32,
-        ) -> f32
-        {
+        ) -> f32 {
             if value.abs() < epsilon {
                 0.0
-            }
-            else {
+            } else {
                 value
             }
         }

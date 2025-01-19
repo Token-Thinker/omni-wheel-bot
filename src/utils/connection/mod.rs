@@ -11,4 +11,4 @@
 pub(crate) mod server;
 
 // Re-export the server module for easier access.
-pub use server::run as websocket_server;
+pub use server::run as app_server;

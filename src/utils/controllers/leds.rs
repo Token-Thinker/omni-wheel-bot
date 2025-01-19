@@ -13,8 +13,7 @@ const LED_COUNT: usize = 2;
 /// The top-level JSON key is `"led_cmd"`.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "lc", rename_all = "snake_case")] // lc = led command
-pub enum LEDCommand
-{
+pub enum LEDCommand {
     /// Turn the LEDs on.
     /// If `last_color` is None, default to white.
     On,
@@ -22,18 +21,14 @@ pub enum LEDCommand
     Off,
     /// Set color explicitly.
     /// Example JSON: `{ "lc": "set_color", "r": 255, "g": 128, "b": 0 }`
-    SC
-    {
-        r: u8, g: u8, b: u8
-    },
+    SC { r: u8, g: u8, b: u8 },
 }
 
 /// A “LED Module” that manages a chain of `LED_COUNT` addressable LEDs.
 ///
 /// It is generic over any driver that implements `SmartLedsWrite<Color =
 /// RGB8>`. You can pass in, for example, `esp_hal_smartled::SmartLedsAdapter`.
-pub struct LedModule<Driver>
-{
+pub struct LedModule<Driver> {
     driver: Driver,
     is_on: bool,
     last_color: Option<RGB8>,
@@ -44,8 +39,7 @@ where
     Driver: SmartLedsWrite<Color = RGB8, Error = E>,
 {
     /// Create a new module. By default, `is_on = false`, `last_color = None`.
-    pub fn new(driver: Driver) -> Self
-    {
+    pub fn new(driver: Driver) -> Self {
         Self {
             driver,
             is_on: false,
@@ -60,8 +54,7 @@ where
     pub fn ex_command(
         &mut self,
         cmd: LEDCommand,
-    ) -> Result<(), E>
-    {
+    ) -> Result<(), E> {
         match cmd {
             LEDCommand::On => {
                 self.is_on = true;
@@ -91,8 +84,7 @@ where
     fn set_all(
         &mut self,
         color: RGB8,
-    ) -> Result<(), E>
-    {
+    ) -> Result<(), E> {
         // Optionally apply brightness or gamma here. Example:
         // use smart_leds::brightness;
         // let data = brightness(core::iter::repeat(color).take(LED_COUNT), 128);
