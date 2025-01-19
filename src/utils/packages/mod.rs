@@ -96,13 +96,13 @@ where
             channel: Some(channel),
             rmt_buffer,
             pulses: (
-                PulseCode::new (
+                PulseCode::new(
                     true,
                     ((SK68XX_T0H_NS * src_clock) / 1000) as u16,
                     false,
                     ((SK68XX_T0L_NS * src_clock) / 1000) as u16,
                 ),
-                PulseCode::new (
+                PulseCode::new(
                     true,
                     ((SK68XX_T1H_NS * src_clock) / 1000) as u16,
                     false,
@@ -151,7 +151,10 @@ where
     /// Convert all RGB8 items of the iterator to the RMT format and
     /// add them to internal buffer, then start a singular RMT operation
     /// based on that buffer.
-    fn write<T, I>(&mut self, iterator: T) -> Result<(), Self::Error>
+    fn write<T, I>(
+        &mut self,
+        iterator: T,
+    ) -> Result<(), Self::Error>
     where
         T: IntoIterator<Item = I>,
         I: Into<Self::Color>,
