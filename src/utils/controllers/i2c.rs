@@ -69,6 +69,7 @@ pub enum I2CCommand
 /// Manages I2C devices including PWM motor controller and IMU.
 pub struct I2CDevices<'a, I2C>
 {
+    #[allow(dead_code)]
     i2c: &'a RefCell<I2C>,
     pwm: Pca9685<RefCellDevice<'a, I2C>>,
     imu: Icm42670<RefCellDevice<'a, I2C>>,
