@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-set -e
+
+set -euo pipefail
 
 # Function to display usage information
 function usage() {
-    echo "Usage: $0 [options]"
+    echo "Usage: ${0} [options]"
     echo ""
     echo "Options:"
     echo "  -b, --build         Only build the firmware, skip flashing and monitoring."
-    echo "  -f, --flash         Only flash the firmware, skip building and monitoring."
-    echo "  -m, --monitor  Only start monitoring using screen, skip building and flashing."
+    echo "  -f, --flash          Only flash the firmware, skip building and monitoring."
+    echo "  -m, --monitor       Only start monitoring using screen, skip building and flashing."
     echo "  -h, --help          Display this help message."
     exit 0
 }
@@ -20,7 +21,7 @@ MONITOR_ONLY=false
 
 # Parse command-line arguments
 while [[ $# -gt 0 ]]; do
-    case $1 in
+    case "${1}" in
         -h|--help)
             usage
             ;;
@@ -42,8 +43,24 @@ while [[ $# -gt 0 ]]; do
             MONITOR_ONLY=true
             shift
             ;;
+        --build=true)
+            BUILD=true
+            shift
+            ;;
+        --build=false)
+            BUILD=false
+            shift
+            ;;
+        --flash=true)
+            FLASH=true
+            shift
+            ;;
+        --flash=false)
+            FLASH=false
+            shift
+            ;;
         *)
-            echo "Unknown option: $1"
+            echo "Unknown option: ${1}"
             usage
             ;;
     esac
@@ -51,7 +68,7 @@ done
 
 # Utility function to check if a command exists
 function command_exists() {
-    command -v "$1" >/dev/null 2>&1
+    command -v "${1}" >/dev/null 2>&1
 }
 
 # Verify Docker installation
@@ -63,18 +80,19 @@ fi
 
 # Function to detect serial port
 function detect_serial_port() {
-    local OS_TYPE
-    OS_TYPE="$(uname)"
-    local PORTS=()
+    # shellcheck disable=SC2155
+    local OS_TYPE="$(uname)"
+
+    declare -a PORTS=()
 
     if [[ "$OS_TYPE" == "Darwin" ]]; then
         # macOS: Look for /dev/cu.usbserial*
-        PORTS=($(ls /dev/cu.usbserial* 2>/dev/null))
+        PORTS+=( "$(ls /dev/cu.usbserial* 2> /dev/null)" )
     elif [[ "$OS_TYPE" == "Linux" ]]; then
         # Linux: Look for /dev/ttyUSB*
-        PORTS=($(ls /dev/ttyUSB* 2>/dev/null))
+        PORTS+=("$(ls /dev/ttyUSB* 2> /dev/null)")
     else
-        echo "Unsupported OS: $OS_TYPE"
+        echo "Unsupported OS: ${OS_TYPE}"
         echo "Please specify the serial port manually."
         return 1
     fi
@@ -91,8 +109,8 @@ function detect_serial_port() {
             echo "  [$i] ${PORTS[$i]}"
         done
         read -p "Select the port number to use: " PORT_INDEX
-        if [[ "$PORT_INDEX" =~ ^[0-9]+$ ]] && [[ "$PORT_INDEX" -ge 0 && "$PORT_INDEX" -lt ${#PORTS[@]} ]]; then
-            echo "${PORTS[$PORT_INDEX]}"
+        if [[ "${PORT_INDEX}" =~ ^[0-9]+$ ]] && [[ "${PORT_INDEX}" -ge 0 && "${PORT_INDEX}" -lt ${#PORTS[@]} ]]; then
+            echo "${PORTS[${PORT_INDEX}]}"
             return 0
         else
             echo "Invalid selection."
@@ -107,15 +125,18 @@ if $BUILD; then
     echo "        Building Project"
     echo "=============================="
 
-    echo "Building Docker Image 'esp-owb'..."
-    docker build -q -t esp-owb .
-
-    echo "Running Docker Container to Build Firmware..."
-    docker run --rm -it \
-      -v "$(pwd)":/owb \
-      -w /owb \
-      esp-owb \
-      /bin/bash -l -c "export PATH=\"/home/esp/.rustup/toolchains/esp/xtensa-esp-elf/esp-14.2.0_20240906/xtensa-esp-elf/bin:/home/esp/.cargo/bin:\$PATH\" && cargo +esp build -q --release --target xtensa-esp32-none-elf"
+    echo "Building Firmware In Docker Container..."
+    docker run \
+      -it \
+      -v "$(pwd)":/workspace \
+      -e LIBCLANG_PATH="/home/esp/.rustup/toolchains/esp/xtensa-esp32-elf-clang/esp-18.1.2_20240912/esp-clang/lib" \
+      -e PATH="/home/esp/.rustup/toolchains/esp/xtensa-esp-elf/esp-14.2.0_20240906/xtensa-esp-elf/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/esp/.cargo/bin" \
+      --rm \
+      --workdir='/workspace' \
+      --name='omni-wheel-bot-builder' \
+      --entrypoint='rustup' \
+      docker.io/espressif/idf-rust:esp32_1.84.0.0 \
+      run esp cargo build --release --target xtensa-esp32-none-elf
 
     echo "=============================="
     echo "         Build Complete"
@@ -152,15 +173,16 @@ if $FLASH; then
 
     # Verify that the firmware file exists
     FIRMWARE_PATH="target/xtensa-esp32-none-elf/release/omni-wheel"
-    if [[ ! -f "$FIRMWARE_PATH" ]]; then
-        echo "Error: Firmware file '$FIRMWARE_PATH' does not exist."
+
+    if [[ ! -f "${FIRMWARE_PATH}" ]]; then
+        echo "Error: Firmware file '${FIRMWARE_PATH}' does not exist."
         echo "Please ensure the build phase completed successfully."
         exit 1
     fi
 
     # Flash the firmware
     echo "Flashing firmware to ESP32..."
-    espflash flash --port "$PORT" "$FIRMWARE_PATH"
+    espflash flash --port "$PORT" "${FIRMWARE_PATH}"
 
     echo "=============================="
     echo "         Flash Complete"
