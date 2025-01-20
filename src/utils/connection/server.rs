@@ -10,12 +10,14 @@
 //! - `ServerTimer`: Manages async timeouts.
 //! - `WebSocket`: Defines WebSocket behavior for handling client messages.
 
-use crate::utils::controllers::{SystemCommand, I2C_CHANNEL, LED_CHANNEL};
-use crate::utils::frontend::SITE;
+use crate::utils::{
+    frontend::SITE,
+    controllers::{SystemCommand, I2C_CHANNEL, LED_CHANNEL}
+};
 use embassy_net::Stack;
 use embassy_time::Duration;
-use picoserve::response::{IntoResponse, StatusCode};
 use picoserve::{
+    response::StatusCode,
     io::embedded_io_async as embedded_aio,
     response::ws::{
         Message, ReadMessageError, SocketRx, SocketTx, WebSocketCallback, WebSocketUpgrade,

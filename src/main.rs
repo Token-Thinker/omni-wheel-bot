@@ -12,9 +12,9 @@ use embassy_time::{Duration, Timer};
 // ESP-specific imports
 use esp_alloc as _;
 use esp_backtrace as _;
-use esp_hal::clock::CpuClock;
-use esp_hal::time::RateExtU32;
 use esp_hal::{
+    time::RateExtU32,
+    clock::CpuClock,
     i2c::master::{Config, I2c},
     rmt::{Channel, Rmt},
     rng::Rng,
