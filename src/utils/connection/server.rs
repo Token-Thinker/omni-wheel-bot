@@ -10,21 +10,18 @@
 //! - `ServerTimer`: Manages async timeouts.
 //! - `WebSocket`: Defines WebSocket behavior for handling client messages.
 
+use crate::utils::controllers::{SystemCommand, I2C_CHANNEL, LED_CHANNEL};
+use crate::utils::frontend::SITE;
 use embassy_net::Stack;
 use embassy_time::Duration;
+use picoserve::response::{IntoResponse, StatusCode};
 use picoserve::{
     io::embedded_io_async as embedded_aio,
     response::ws::{
-        Message,
-        ReadMessageError,
-        SocketRx,
-        SocketTx,
-        WebSocketCallback,
-        WebSocketUpgrade,
+        Message, ReadMessageError, SocketRx, SocketTx, WebSocketCallback, WebSocketUpgrade,
     },
     Router,
 };
-use crate::utils::controllers::{SystemCommand, I2C_CHANNEL, LED_CHANNEL};
 
 /// Starts the WebSocket server with the provided configuration.
 ///
@@ -36,13 +33,14 @@ use crate::utils::controllers::{SystemCommand, I2C_CHANNEL, LED_CHANNEL};
 ///
 /// # Returns
 /// This function runs indefinitely.
+///
+
 pub async fn run(
     id: usize,
     port: u16,
     stack: Stack<'static>,
     config: Option<&'static picoserve::Config<Duration>>,
-) -> !
-{
+) -> ! {
     let default_config = picoserve::Config::new(picoserve::Timeouts {
         start_read_request: Some(Duration::from_secs(5)),
         read_request: Some(Duration::from_secs(1)),
@@ -52,42 +50,36 @@ pub async fn run(
     let config = config.unwrap_or(&default_config);
 
     let router = Router::new()
-        .route("/",
-               picoserve::routing::get_service(picoserve::response::File::html(include_str!("../../app/index.html"))),
+        .route(
+            "/",
+            picoserve::routing::get(|| async { // Directly use a closure for the handler
+                picoserve::response::Response::new(
+                    StatusCode::OK,
+                    SITE, // Static content
+                )
+                    .with_headers([
+                        ("Content-Type", "text/html; charset=utf-8"),
+                        ("Content-Encoding", "gzip"),
+                    ])
+            }),
         )
         .route(
-            "/main.js",
-            picoserve::routing::get_service(picoserve::response::File::javascript(include_str!("../../app/static/js/main.js"))),
-        )
-        .route(
-            "/virtualjoystick.js",
-            picoserve::routing::get_service(picoserve::response::File::javascript(include_str!(
-                "../../app/static/js/virtualjoystick.js"
-            ))),
-        )
-
-        .route(
-        "/ws",
-        picoserve::routing::get(|upgrade: WebSocketUpgrade| {
-            upgrade.on_upgrade(WebSocket).with_protocol("messages")
+            "/ws",
+            picoserve::routing::get(|upgrade: WebSocketUpgrade| {
+                upgrade.on_upgrade(WebSocket).with_protocol("messages")
             }),
         );
 
-
     // Print out the IP and port before starting the server.
     if let Some(ip_cfg) = stack.config_v4() {
-        tracing::info!(
-            "Starting server at {}:{}",
-            ip_cfg.address,
-            port
-        );
+        tracing::info!("Starting server at {}:{}", ip_cfg.address, port);
     } else {
         tracing::warn!(
             "Starting WebSocket server on port {port}, but no IPv4 address is assigned yet!"
         );
     }
 
-    let (mut rx_buffer, mut tx_buffer, mut http_buffer) = ([0; 1024], [0; 1024], [0; 256]);
+    let (mut rx_buffer, mut tx_buffer, mut http_buffer) = ([0; 1024], [0; 1024], [0; 4096]);
 
     picoserve::listen_and_serve(
         id,
@@ -106,8 +98,7 @@ pub async fn run(
 pub struct ServerTimer;
 
 #[allow(unused_qualifications)]
-impl picoserve::Timer for ServerTimer
-{
+impl picoserve::Timer for ServerTimer {
     type Duration = embassy_time::Duration;
     type TimeoutError = embassy_time::TimeoutError;
 
@@ -116,8 +107,7 @@ impl picoserve::Timer for ServerTimer
         &mut self,
         duration: Self::Duration,
         future: F,
-    ) -> Result<F::Output, Self::TimeoutError>
-    {
+    ) -> Result<F::Output, Self::TimeoutError> {
         embassy_time::with_timeout(duration, future).await
     }
 }
@@ -125,8 +115,7 @@ impl picoserve::Timer for ServerTimer
 /// Handles incoming WebSocket connections.
 pub struct WebSocket;
 
-impl WebSocketCallback for WebSocket
-{
+impl WebSocketCallback for WebSocket {
     async fn run<Reader, Writer>(
         self,
         mut rx: SocketRx<Reader>,
@@ -165,11 +154,13 @@ impl WebSocketCallback for WebSocket
                 Ok(Message::Binary(data)) => match serde_json::from_slice::<SystemCommand>(data) {
                     Ok(SystemCommand::I(i2c_cmd)) => {
                         I2C_CHANNEL.send(i2c_cmd).await;
-                        tx.send_binary(b"I2C command received and forwarded").await?
+                        tx.send_binary(b"I2C command received and forwarded")
+                            .await?
                     }
                     Ok(SystemCommand::L(led_cmd)) => {
                         LED_CHANNEL.send(led_cmd).await;
-                        tx.send_binary(b"LED command received and forwarded").await?
+                        tx.send_binary(b"LED command received and forwarded")
+                            .await?
                     }
                     Err(error) => {
                         tracing::error!(?error, "error deserializing incoming message");
