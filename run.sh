@@ -17,7 +17,7 @@ function usage() {
 # Default actions: perform build and flash by default unless specified otherwise
 BUILD=true
 FLASH=true
-MONITOR_ONLY=false
+MONITOR=false
 
 # Parse command-line arguments
 while [[ $# -gt 0 ]]; do
@@ -28,19 +28,19 @@ while [[ $# -gt 0 ]]; do
         -b|--build)
             BUILD=true
             FLASH=false
-            MONITOR_ONLY=false
+            MONITOR=false
             shift
             ;;
         -f|--flash)
             BUILD=false
             FLASH=true
-            MONITOR_ONLY=false
+            MONITOR=false
             shift
             ;;
         -m|--monitor)
             BUILD=false
             FLASH=false
-            MONITOR_ONLY=true
+            MONITOR=true
             shift
             ;;
         --build=true)
@@ -190,7 +190,7 @@ if $FLASH; then
 fi
 
 # Monitor Phase
-if $MONITOR_ONLY; then
+if $MONITOR; then
     echo "=============================="
     echo "         Starting Monitor"
     echo "=============================="
