@@ -154,7 +154,6 @@ if $FLASH; then
         echo "Error: 'espflash' is not installed."
         echo "Please install it using one of the following methods:"
         echo "  - Via Cargo: cargo install espflash"
-        echo "  - Via Pip: pip install espflash"
         exit 1
     fi
 

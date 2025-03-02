@@ -78,12 +78,7 @@ where
     ) -> Result<Self, DeviceError<E>> {
         let imu = Icm42670::new(RefCellDevice::new(i2c), ImuAddress::Primary)
             .map_err(DeviceError::ImuError)?;
-        let mut pwm = Pca9685::new(RefCellDevice::new(i2c), PwmAddress::default())
-            .map_err(DeviceError::PwmError)?;
-
-        pwm.enable().map_err(DeviceError::PwmError)?;
-        pwm.set_prescale(3).map_err(DeviceError::PwmError)?;
-        pwm.set_all_on_off(&[0; 16], &[0x0FFF; 16])
+        let mut pwm = Pca9685::new(RefCellDevice::new(i2c), PwmAddress::from(0x55))
             .map_err(DeviceError::PwmError)?;
 
         Ok(Self {
@@ -97,6 +92,15 @@ where
             ],
             kinematics: WheelKinematics::new(wheel_radius, robot_radius),
         })
+    }
+
+    pub fn scan(i2c: &'a RefCell<I2C>) {
+        let mut bus = i2c.borrow_mut();
+        for addr in 0x03..0x78 {
+            if bus.write(addr, &[]).is_ok() {
+                tracing::warn!("I2C device found at address 0x{:02X}", addr);
+            }
+        }
     }
 
     /// Processes and executes I2C commands.
@@ -180,6 +184,10 @@ where
         Ok(())
     }
 
+    fn apply_wheels_bulk(&mut self, wheels: &[f32]) -> Result<(), DeviceError<E>> {
+        todo!("Need to implement function for bulk all on and off for simulations changes")
+    }
+
     /// Reads IMU sensor data.
     pub fn read_imu(&mut self) -> Result<((f32, f32, f32), (f32, f32, f32), f32), DeviceError<E>> {
         let accel = self.imu.accel_norm().map_err(DeviceError::AccelError)?;
@@ -188,12 +196,39 @@ where
         Ok(((accel.x, accel.y, accel.z), (gyro.x, gyro.y, gyro.z), temp))
     }
 
+    pub fn init_imu_data(&mut self)
+    {
+        match self.read_imu() {
+            Ok((accel, gyro, temp)) => {
+                tracing::info!("Initial IMU read successful:");
+                tracing::info!("Accelerometer: {:?}", accel);
+                tracing::info!("Gyroscope: {:?}", gyro);
+                tracing::info!("Temperature: {:?}", temp);
+            }
+            Err(e) => {
+                tracing::error!("Failed to read IMU data: {:?}", e);
+            }
+        }
+    }
+
+
+    pub fn configure_pwm(&mut self) -> Result<(), DeviceError<E>> {
+        self.pwm.enable().map_err(DeviceError::PwmError)?;
+        tracing::info!("PWM enabled");
+        self.pwm
+            .set_prescale(100)
+            .map_err(DeviceError::PwmError)?;
+        tracing::info!("PWM prescale set to 60Hz");
+        Ok(())
+    }
+
     /// Enables both PWM and IMU devices.
     pub fn enable(&mut self) -> Result<(), DeviceError<E>> {
         self.pwm.enable().map_err(DeviceError::PwmError)?;
         self.imu
             .set_power_mode(PowerMode::SixAxisLowNoise)
-            .map_err(DeviceError::ImuError)
+            .map_err(DeviceError::ImuError)?;
+        Ok(())
     }
 
     /// Disables both PWM and IMU devices.

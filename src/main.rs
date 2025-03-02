@@ -78,11 +78,22 @@ async fn main(spawner: Spawner) -> ! {
         .with_scl(peripherals.GPIO22);
     let i2c_ref = I2C_REF.init(RefCell::new(i2c));
 
-    let devices_init = I2CDevices::new(i2c_ref, 0.148, 0.195);
-    if let Err(e) = &devices_init {
-        tracing::warn!("Skipping I2C/IMU usage: {:?}", e);
-    }
-    let devices = DEVICES.init(devices_init.ok());
+    let devices_init = I2CDevices::new(i2c_ref, 0.148, 0.195)
+        .map(|mut dev| {
+            if let Err(e) = dev.configure_pwm() {
+                tracing::warn!("Additional PWM configuration failed: {:?}", e);
+            }
+            dev.init_imu_data();
+            dev
+        })
+        .or_else(|e| {
+            tracing::warn!("Skipping I2C/IMU usage: {:?}", e);
+            I2CDevices::scan(&i2c_ref);
+            Err(e)
+        })
+        .ok();
+
+    let devices = DEVICES.init(devices_init);
 
     // IInitialize LEDs
     let rmt = Rmt::new(peripherals.RMT, 80.MHz()).unwrap();
