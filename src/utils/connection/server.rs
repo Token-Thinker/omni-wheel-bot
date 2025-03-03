@@ -4,101 +4,49 @@
 //! `picoserve` framework. It manages incoming WebSocket connections, processes
 //! I2C commands, and communicates with the embedded control system through a
 //! channel interface.
-//!
-//! # Components
-//! - `run`: Starts the WebSocket server.
-//! - `ServerTimer`: Manages async timeouts.
-//! - `WebSocket`: Defines WebSocket behavior for handling client messages.
+
+extern crate alloc;
 
 use crate::utils::{
+    controllers::{SystemCommand, I2C_CHANNEL, LED_CHANNEL},
     frontend::SITE,
-    controllers::{SystemCommand, I2C_CHANNEL, LED_CHANNEL}
 };
+use alloc::{
+    vec::Vec,
+    string::String};
+
+use core::convert::Infallible;
+
 use embassy_net::Stack;
+use embassy_sync::{
+    mutex::Mutex,
+    blocking_mutex::raw::CriticalSectionRawMutex};
 use embassy_time::Duration;
-use picoserve::{
-    response::StatusCode,
-    io::embedded_io_async as embedded_aio,
-    response::ws::{
-        Message, ReadMessageError, SocketRx, SocketTx, WebSocketCallback, WebSocketUpgrade,
-    },
-    Router,
-};
+use embedded_io_async::Read;
+use hashbrown::HashMap;
+use lazy_static::lazy_static;
+use picoserve::{io::embedded_io_async as embedded_aio, response::ws::{
+    Message, ReadMessageError, SocketRx, SocketTx, WebSocketCallback, WebSocketUpgrade,
+}, response::StatusCode, extract::FromRequestParts, Router, request::RequestParts};
+use picoserve::extract::FromRequest;
+use picoserve::request::RequestBody;
+use picoserve::url_encoded::{deserialize_form, UrlEncodedString};
+use serde::Deserialize;
 
-/// Starts the WebSocket server with the provided configuration.
-///
-/// # Parameters
-/// - `id`: Unique server identifier.
-/// - `port`: Port to listen on.
-/// - `stack`: Network stack for communication.
-/// - `config`: Optional server configuration.
-///
-/// # Returns
-/// This function runs indefinitely.
-///
+pub struct ServerTimer;
+pub struct WebSocket;
+#[derive(Clone, Debug)]
+pub struct SessionState {
+    pub last_seen: u64,
+}
+pub struct SessionManager;
 
-pub async fn run(
-    id: usize,
-    port: u16,
-    stack: Stack<'static>,
-    config: Option<&'static picoserve::Config<Duration>>,
-) -> ! {
-    let default_config = picoserve::Config::new(picoserve::Timeouts {
-        start_read_request: Some(Duration::from_secs(5)),
-        read_request: Some(Duration::from_secs(1)),
-        write: Some(Duration::from_secs(5)),
-    });
-
-    let config = config.unwrap_or(&default_config);
-
-    let router = Router::new()
-        .route(
-            "/",
-            picoserve::routing::get(|| async { // Directly use a closure for the handler
-                picoserve::response::Response::new(
-                    StatusCode::OK,
-                    SITE, // Static content
-                )
-                    .with_headers([
-                        ("Content-Type", "text/html; charset=utf-8"),
-                        ("Content-Encoding", "gzip"),
-                    ])
-            }),
-        )
-        .route(
-            "/ws",
-            picoserve::routing::get(|upgrade: WebSocketUpgrade| {
-                upgrade.on_upgrade(WebSocket).with_protocol("messages")
-            }),
-        );
-
-    // Print out the IP and port before starting the server.
-    if let Some(ip_cfg) = stack.config_v4() {
-        tracing::info!("Starting server at {}:{}", ip_cfg.address, port);
-    } else {
-        tracing::warn!(
-            "Starting WebSocket server on port {port}, but no IPv4 address is assigned yet!"
-        );
-    }
-
-    let (mut rx_buffer, mut tx_buffer, mut http_buffer) = ([0; 1024], [0; 1024], [0; 4096]);
-
-    picoserve::listen_and_serve(
-        id,
-        &router,
-        config,
-        stack,
-        port,
-        &mut rx_buffer,
-        &mut tx_buffer,
-        &mut http_buffer,
-    )
-    .await
+lazy_static! {
+    pub static ref SESSION_STORE: Mutex<CriticalSectionRawMutex, HashMap<String, SessionState>> =
+        Mutex::new(HashMap::new());
 }
 
 /// Manages timeouts for the WebSocket server.
-pub struct ServerTimer;
-
 #[allow(unused_qualifications)]
 impl picoserve::Timer for ServerTimer {
     type Duration = embassy_time::Duration;
@@ -115,8 +63,6 @@ impl picoserve::Timer for ServerTimer {
 }
 
 /// Handles incoming WebSocket connections.
-pub struct WebSocket;
-
 impl WebSocketCallback for WebSocket {
     async fn run<Reader, Writer>(
         self,
@@ -185,5 +131,165 @@ impl WebSocketCallback for WebSocket {
         };
 
         tx.close(close_reason).await
+    }
+}
+
+impl SessionManager {
+    /// Creates a new session with the given session ID and timestamp.
+    pub async fn create_session(
+        session_id: String,
+        timestamp: u64,
+    ) {
+        let mut store = SESSION_STORE.lock();
+        store.await.insert(
+            session_id,
+            SessionState {
+                last_seen: timestamp,
+            },
+        );
+    }
+
+    /// Retrieves a copy of the session state for the given session ID.
+    /// Returns None if the session does not exist.
+    pub async fn get_session(session_id: &str) -> Option<SessionState> {
+        let store = SESSION_STORE.lock();
+        store.await.get(session_id).cloned()
+    }
+
+    /// Updates the last seen timestamp of the session identified by session_id.
+    /// Returns true if the session was found and updated.
+    pub async fn update_session(
+        session_id: &str,
+        timestamp: u64,
+    ) -> bool {
+        let mut store = SESSION_STORE.lock();
+        if let Some(session) = store.await.get_mut(session_id) {
+            session.last_seen = timestamp;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Removes the session identified by session_id.
+    /// Returns true if a session was removed.
+    pub async fn remove_session(session_id: &str) -> bool {
+        let mut store = SESSION_STORE.lock();
+        store.await.remove(session_id).is_some()
+    }
+
+    /// Purges sessions that have not been updated since the provided threshold.
+    /// For example, pass in a timestamp and any session with last_seen less than that value will be removed.
+    pub async fn purge_stale_sessions(threshold: u64) {
+        let mut store = SESSION_STORE.lock();
+        // Retain sessions that have a last_seen timestamp >= threshold.
+        store.await.retain(|_id, session| session.last_seen >= threshold);
+    }
+
+    /// Returns a list of active session IDs.
+    pub async fn list_sessions() -> Vec<String> {
+        let store = SESSION_STORE.lock();
+        store.await.keys().cloned().collect()
+    }
+}
+
+/// Creates WS Server
+pub async fn run(
+    id: usize,
+    port: u16,
+    stack: Stack<'static>,
+    config: Option<&'static picoserve::Config<Duration>>,
+) -> ! {
+    let default_config = picoserve::Config::new(picoserve::Timeouts {
+        start_read_request: Some(Duration::from_secs(5)),
+        read_request: Some(Duration::from_secs(1)),
+        write: Some(Duration::from_secs(5)),
+    });
+
+    let config = config.unwrap_or(&default_config);
+
+    let router = Router::new()
+        .route(
+            "/",
+            picoserve::routing::get(|| async {
+                // Directly use a closure for the handler
+                picoserve::response::Response::new(
+                    StatusCode::OK,
+                    SITE, // Static content
+                )
+                .with_headers([
+                    ("Content-Type", "text/html; charset=utf-8"),
+                    ("Content-Encoding", "gzip"),
+                ])
+            }),
+        )
+        .route(
+            "/ws",
+            picoserve::routing::get(|params: WsConnectionParams| async move {
+                let session_id = params.query.session;
+                tracing::info!("New WebSocket connection with session id: {}", session_id);
+                let now = embassy_time::Instant::now().as_secs();
+                SessionManager::create_session(session_id.clone(), now).await;
+                params.upgrade.on_upgrade(WebSocket).with_protocol("messages")
+            }),
+        );
+
+    // Print out the IP and port before starting the server.
+    if let Some(ip_cfg) = stack.config_v4() {
+        tracing::info!("Starting server at {}:{}", ip_cfg.address, port);
+    } else {
+        tracing::warn!(
+            "Starting WebSocket server on port {port}, but no IPv4 address is assigned yet!"
+        );
+    }
+
+    let (mut rx_buffer, mut tx_buffer, mut http_buffer) = ([0; 1024], [0; 1024], [0; 4096]);
+
+    picoserve::listen_and_serve_with_state(
+        id,
+        &router,
+        config,
+        stack,
+        port,
+        &mut rx_buffer,
+        &mut tx_buffer,
+        &mut http_buffer,
+        &()
+    )
+    .await
+}
+
+#[derive(Debug, Deserialize)]
+struct QueryParams {
+    session: String,
+}
+
+pub struct WsConnectionParams {
+    pub upgrade: WebSocketUpgrade,
+    pub query: QueryParams,
+}
+
+impl<'r, S> FromRequest<'r, S> for WsConnectionParams {
+    type Rejection = &'static str; // Or a custom error type
+
+    async fn from_request<R: Read>(
+        state: &'r S,
+        parts: RequestParts<'r>,
+        body: RequestBody<'r, R>,
+    ) -> Result<Self, Self::Rejection> {
+        // First extract the WebSocketUpgrade as usual.
+        let upgrade = WebSocketUpgrade::from_request(state, parts.clone(), body).await
+            .map_err(|_| "Failed to extract WebSocketUpgrade")?;
+
+        // Then extract the query string for QueryParams.
+        let query_str = parts.query().ok_or("Missing query parameters")?;
+        let query = deserialize_form::<QueryParams>(query_str)
+            .map_err(|_| "Invalid query parameters")?;
+
+        if query.session.is_empty() {
+            return Err("Session ID is required");
+        }
+
+        Ok(WsConnectionParams { upgrade, query })
     }
 }

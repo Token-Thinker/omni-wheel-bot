@@ -1,5 +1,6 @@
 #![no_std]
 #![no_main]
+extern crate alloc;
 
 // Module imports
 mod utils;
@@ -13,11 +14,11 @@ use embassy_time::{Duration, Timer};
 use esp_alloc as _;
 use esp_backtrace as _;
 use esp_hal::{
-    time::RateExtU32,
     clock::CpuClock,
     i2c::master::{Config, I2c},
     rmt::{Channel, Rmt},
     rng::Rng,
+    time::RateExtU32,
     timer::timg::TimerGroup,
     Blocking,
 };
@@ -47,8 +48,8 @@ macro_rules! mk_static {
 }
 
 // Constants for Wi-Fi credentials
-const SSID: &str = "Unavailable";
-const PASSWORD: &str = "home4226101";
+const SSID: &str = "";
+const PASSWORD: &str = "";
 const BUF_SIZE: usize = 2 * 24 + 1;
 
 // Static memory for I2C devices

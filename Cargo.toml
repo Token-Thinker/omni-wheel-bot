@@ -43,10 +43,9 @@ icm42670 = { version = "0.2.0" }
 smart-leds-trait = {version = "0.3.0"}
 
 # Communications and Utilities
-picoserve = { version = "0.13.3", features = ["embassy"] }
+picoserve = { version = "0.15.0", features = ["embassy"] }
 
 # Memory Management
 static_cell = { version = "2.0", features = ["nightly"] }
-
-[patch.crates-io]
-picoserve = { git = "https://github.com/sammhicks/picoserve.git", rev = "c4fe40eccfcd1188f117d4b7c689f6dc48c94d44" }
+lazy_static = {version = "1.5.0", features = ["spin_no_std"]}
+hashbrown = {version = "0.15.2"}

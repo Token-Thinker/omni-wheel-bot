@@ -55,8 +55,7 @@ pub enum I2CCommand {
 }
 
 /// Manages I2C devices including PWM motor controller and IMU.
-pub struct I2CDevices<'a, I2C>
-{
+pub struct I2CDevices<'a, I2C> {
     #[allow(dead_code)]
     i2c: &'a RefCell<I2C>,
     pwm: Pca9685<RefCellDevice<'a, I2C>>,
@@ -184,7 +183,10 @@ where
         Ok(())
     }
 
-    fn apply_wheels_bulk(&mut self, wheels: &[f32]) -> Result<(), DeviceError<E>> {
+    fn apply_wheels_bulk(
+        &mut self,
+        wheels: &[f32],
+    ) -> Result<(), DeviceError<E>> {
         todo!("Need to implement function for bulk all on and off for simulations changes")
     }
 
@@ -196,8 +198,7 @@ where
         Ok(((accel.x, accel.y, accel.z), (gyro.x, gyro.y, gyro.z), temp))
     }
 
-    pub fn init_imu_data(&mut self)
-    {
+    pub fn init_imu_data(&mut self) {
         match self.read_imu() {
             Ok((accel, gyro, temp)) => {
                 tracing::info!("Initial IMU read successful:");
@@ -211,13 +212,10 @@ where
         }
     }
 
-
     pub fn configure_pwm(&mut self) -> Result<(), DeviceError<E>> {
         self.pwm.enable().map_err(DeviceError::PwmError)?;
         tracing::info!("PWM enabled");
-        self.pwm
-            .set_prescale(100)
-            .map_err(DeviceError::PwmError)?;
+        self.pwm.set_prescale(100).map_err(DeviceError::PwmError)?;
         tracing::info!("PWM prescale set to 60Hz");
         Ok(())
     }
