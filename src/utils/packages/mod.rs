@@ -1,12 +1,8 @@
-//esp-hal-smartled
-
-#![deny(missing_docs)]
-
 use core::{fmt::Debug, slice::IterMut};
 
 use esp_hal::{
     clock::Clocks,
-    gpio::OutputPin,
+    gpio::{Level, OutputPin},
     peripheral::Peripheral,
     rmt::{Error as RmtError, PulseCode, TxChannel, TxChannelConfig, TxChannelCreator},
 };
@@ -77,35 +73,32 @@ where
         O: OutputPin + 'd,
         C: TxChannelCreator<'d, TX, O>,
     {
-        let config = TxChannelConfig {
-            clk_divider: 1,
-            idle_output_level: false,
-            carrier_modulation: false,
-            idle_output: true,
-
-            ..TxChannelConfig::default()
-        };
+        let config = TxChannelConfig::default()
+            .with_clk_divider(1)
+            .with_idle_output_level(Level::Low)
+            .with_carrier_modulation(false)
+            .with_idle_output(true);
 
         let channel = channel.configure(pin, config).unwrap();
 
         // Assume the RMT peripheral is set up to use the APB clock
         let clocks = Clocks::get();
-        let src_clock = clocks.apb_clock.to_MHz();
+        let src_clock = clocks.apb_clock.as_mhz();
 
         Self {
             channel: Some(channel),
             rmt_buffer,
             pulses: (
                 PulseCode::new(
-                    true,
+                    Level::High,
                     ((SK68XX_T0H_NS * src_clock) / 1000) as u16,
-                    false,
+                    Level::Low,
                     ((SK68XX_T0L_NS * src_clock) / 1000) as u16,
                 ),
                 PulseCode::new(
-                    true,
+                    Level::High,
                     ((SK68XX_T1H_NS * src_clock) / 1000) as u16,
-                    false,
+                    Level::Low,
                     ((SK68XX_T1L_NS * src_clock) / 1000) as u16,
                 ),
             ),
@@ -151,10 +144,7 @@ where
     /// Convert all RGB8 items of the iterator to the RMT format and
     /// add them to internal buffer, then start a singular RMT operation
     /// based on that buffer.
-    fn write<T, I>(
-        &mut self,
-        iterator: T,
-    ) -> Result<(), Self::Error>
+    fn write<T, I>(&mut self, iterator: T) -> Result<(), Self::Error>
     where
         T: IntoIterator<Item = I>,
         I: Into<Self::Color>,

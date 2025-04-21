@@ -185,7 +185,7 @@ where
 
     fn apply_wheels_bulk(
         &mut self,
-        wheels: &[f32],
+        _wheels: &[f32],
     ) -> Result<(), DeviceError<E>> {
         todo!("Need to implement function for bulk all on and off for simulations changes")
     }
