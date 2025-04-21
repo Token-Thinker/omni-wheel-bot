@@ -2,6 +2,30 @@
 
 set -euo pipefail
 
+# Ensure script is run with sudo/admin privileges
+if [[ $EUID -ne 0 ]]; then
+    echo "This script requires administrative privileges to access serial ports and manage Docker containers."
+    exec sudo -p "Enter your password to run this script with admin privileges: " bash "$0" "$@"
+fi
+
+cat <<-EOF
+
+    ┌──────────────────────────────────────────────────────────────────┐
+    │  Why we ask for your Wi‑Fi password:                            │
+    │    • It’s injected only into this script’s environment          │
+    │      (so your firmware can embed SSID/PASSWORD at build/run).   │
+    │    • We do NOT write it to any file or git — it lives purely    │
+    │      in memory for the duration of this run.                    │
+    └──────────────────────────────────────────────────────────────────┘
+
+EOF
+
+# Prompt for Wi‑Fi credentials (they're only kept in memory; not written to any file)
+read -p "Enter Wi‑Fi SSID: " SSID
+read -s -p "Enter Wi‑Fi Password: " PASSWORD
+echo
+export SSID PASSWORD
+
 # Function to display usage information
 function usage() {
     echo "Usage: ${0} [options]"
@@ -78,6 +102,19 @@ if ! command_exists docker; then
     exit 1
 fi
 
+# Prompt for target board before build
+BOARD_OPTIONS=("esp32" "esp32c2" "esp32c3" "esp32c6" "esp32h2" "esp32p4" "esp32s2" "esp32s3")
+echo "Select the target board (this will enable the corresponding Cargo feature):"
+PS3="Enter choice [1-${#BOARD_OPTIONS[@]}]: "
+select BOARD in "${BOARD_OPTIONS[@]}"; do
+    if [[ -n "$BOARD" ]]; then
+        echo "→ Selected board: $BOARD"
+        break
+    else
+        echo "Invalid selection. Please try again."
+    fi
+done
+
 # Function to detect serial port
 function detect_serial_port() {
     # shellcheck disable=SC2155
@@ -125,10 +162,12 @@ if $BUILD; then
     echo "        Building Project"
     echo "=============================="
 
-    echo "Building Firmware In Docker Container..."
+    echo "Building firmware for board '$BOARD' in Docker container..."
     docker run \
       -it \
       -v "$(pwd)":/workspace \
+      -e SSID="${SSID}" \
+      -e PASSWORD="${PASSWORD}" \
       -e LIBCLANG_PATH="/home/esp/.rustup/toolchains/esp/xtensa-esp32-elf-clang/esp-18.1.2_20240912/esp-clang/lib" \
       -e PATH="/home/esp/.rustup/toolchains/esp/xtensa-esp-elf/esp-14.2.0_20240906/xtensa-esp-elf/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/esp/.cargo/bin" \
       --rm \
@@ -136,7 +175,9 @@ if $BUILD; then
       --name='omni-wheel-bot-builder' \
       --entrypoint='rustup' \
       docker.io/espressif/idf-rust:esp32_1.84.0.0 \
-      run esp cargo build --release --target xtensa-esp32-none-elf
+      run esp cargo build --release \
+        --target xtensa-esp32-none-elf \
+        --features "${BOARD}"
 
     echo "=============================="
     echo "         Build Complete"
@@ -149,7 +190,6 @@ if $FLASH; then
     echo "        Flashing Firmware"
     echo "=============================="
 
-    # Verify espflash installation
     if ! command_exists espflash; then
         echo "Error: 'espflash' is not installed."
         echo "Please install it using one of the following methods:"
@@ -157,8 +197,6 @@ if $FLASH; then
         exit 1
     fi
 
-    # Detect serial port
-    PORT=""
     PORT=$(detect_serial_port) || {
         echo "Attempting manual port entry."
         read -p "Enter the serial port (e.g., /dev/cu.usbserial-A50285BI or /dev/ttyUSB0): " PORT
@@ -169,8 +207,6 @@ if $FLASH; then
     }
 
     echo "Using serial port: $PORT"
-
-    # Verify that the firmware file exists
     FIRMWARE_PATH="target/xtensa-esp32-none-elf/release/omni-wheel"
 
     if [[ ! -f "${FIRMWARE_PATH}" ]]; then
@@ -180,7 +216,7 @@ if $FLASH; then
     fi
 
     # Flash the firmware
-    echo "Flashing firmware to ESP32..."
+    echo "Flashing firmware to ${BOARD} on $PORT..."
     espflash flash --port "$PORT" "${FIRMWARE_PATH}"
 
     echo "=============================="
@@ -194,14 +230,11 @@ if $MONITOR; then
     echo "         Starting Monitor"
     echo "=============================="
 
-    # Verify screen installation
     if ! command_exists screen; then
         echo "Warning: 'screen' is not installed. Install it to view serial output."
         exit 1
     fi
 
-    # Detect serial port for monitoring
-    PORT=""
     PORT=$(detect_serial_port) || {
         echo "Attempting manual port entry for monitoring."
         read -p "Enter the serial port for monitoring: " PORT
@@ -212,6 +245,6 @@ if $MONITOR; then
     }
 
     echo "Starting screen monitor on port $PORT at 115200 baud..."
-    export TERM=xterm  # Set TERM to a simpler value
+    export TERM=xterm
     screen "$PORT" 115200
 fi
