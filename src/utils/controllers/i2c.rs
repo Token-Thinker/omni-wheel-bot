@@ -77,7 +77,7 @@ where
     ) -> Result<Self, DeviceError<E>> {
         let imu = Icm42670::new(RefCellDevice::new(i2c), ImuAddress::Primary)
             .map_err(DeviceError::ImuError)?;
-        let mut pwm = Pca9685::new(RefCellDevice::new(i2c), PwmAddress::from(0x55))
+        let pwm = Pca9685::new(RefCellDevice::new(i2c), PwmAddress::from(0x55))
             .map_err(DeviceError::PwmError)?;
 
         Ok(Self {
@@ -182,7 +182,7 @@ where
         }
         Ok(())
     }
-
+    #[allow(dead_code)]
     fn apply_wheels_bulk(
         &mut self,
         _wheels: &[f32],

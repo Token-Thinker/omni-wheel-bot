@@ -6,6 +6,7 @@ extern crate alloc;
 mod utils;
 // Standard imports
 use core::cell::RefCell;
+use heapless::String;
 // Embassy framework imports
 use embassy_executor::Spawner;
 use embassy_net::{Runner, Stack, StackResources};
@@ -126,6 +127,13 @@ async fn main(spawner: Spawner) -> ! {
     let(controller, interfaces) = esp_wifi::wifi::new(&esp_wifi_ctrl, peripherals.WIFI).unwrap();
 
     let wifi_sta_device = interfaces.sta;
+    let dhcpv_config = {
+        let mut dhcpv = embassy_net::DhcpConfig::default();
+        dhcpv.server_port = 67;
+        dhcpv.client_port = 68;
+        dhcpv.hostname = Some(String::try_from("controller").unwrap());
+        dhcpv
+    };
 
     cfg_if::cfg_if! {
         if #[cfg(feature = "esp32")] {
@@ -138,7 +146,7 @@ async fn main(spawner: Spawner) -> ! {
         }
     }
 
-    let sta_config = embassy_net::Config::dhcpv4(Default::default());
+    let sta_config = embassy_net::Config::dhcpv4(dhcpv_config);
     
     let seed = (rng.random() as u64) << 32 | rng.random() as u64;
 

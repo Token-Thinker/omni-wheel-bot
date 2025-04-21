@@ -15,8 +15,6 @@ use alloc::{
     vec::Vec,
     string::String};
 
-use core::convert::Infallible;
-
 use embassy_net::Stack;
 use embassy_sync::{
     mutex::Mutex,
@@ -25,12 +23,12 @@ use embassy_time::Duration;
 use embedded_io_async::Read;
 use hashbrown::HashMap;
 use lazy_static::lazy_static;
-use picoserve::{io::embedded_io_async as embedded_aio, response::ws::{
-    Message, ReadMessageError, SocketRx, SocketTx, WebSocketCallback, WebSocketUpgrade,
-}, response::StatusCode, Router, request::RequestParts};
-use picoserve::extract::FromRequest;
-use picoserve::request::RequestBody;
-use picoserve::url_encoded::{deserialize_form};
+use picoserve::{
+  io::embedded_io_async as embedded_aio, 
+  response::ws::{Message, ReadMessageError, SocketRx, SocketTx, WebSocketCallback, WebSocketUpgrade},
+  response::StatusCode, extract::FromRequest, Router, request::{RequestParts, RequestBody}, url_encoded::deserialize_form
+};
+
 use serde::Deserialize;
 
 pub struct ServerTimer;
@@ -134,14 +132,14 @@ impl WebSocketCallback for WebSocket {
     }
 }
 
+#[allow(dead_code)]
 impl SessionManager {
     /// Creates a new session with the given session ID and timestamp.
     pub async fn create_session(
         session_id: String,
         timestamp: u64,
     ) {
-        let mut store = SESSION_STORE.lock();
-        store.await.insert(
+        SESSION_STORE.lock().await.insert(
             session_id,
             SessionState {
                 last_seen: timestamp,
@@ -152,8 +150,7 @@ impl SessionManager {
     /// Retrieves a copy of the session state for the given session ID.
     /// Returns None if the session does not exist.
     pub async fn get_session(session_id: &str) -> Option<SessionState> {
-        let store = SESSION_STORE.lock();
-        store.await.get(session_id).cloned()
+        SESSION_STORE.lock().await.get(session_id).cloned()
     }
 
     /// Updates the last seen timestamp of the session identified by session_id.
@@ -162,8 +159,7 @@ impl SessionManager {
         session_id: &str,
         timestamp: u64,
     ) -> bool {
-        let mut store = SESSION_STORE.lock();
-        if let Some(session) = store.await.get_mut(session_id) {
+        if let Some(session) = SESSION_STORE.lock().await.get_mut(session_id) {
             session.last_seen = timestamp;
             true
         } else {
@@ -174,22 +170,19 @@ impl SessionManager {
     /// Removes the session identified by session_id.
     /// Returns true if a session was removed.
     pub async fn remove_session(session_id: &str) -> bool {
-        let mut store = SESSION_STORE.lock();
-        store.await.remove(session_id).is_some()
+        SESSION_STORE.lock().await.remove(session_id).is_some()
     }
 
     /// Purges sessions that have not been updated since the provided threshold.
     /// For example, pass in a timestamp and any session with last_seen less than that value will be removed.
     pub async fn purge_stale_sessions(threshold: u64) {
-        let mut store = SESSION_STORE.lock();
         // Retain sessions that have a last_seen timestamp >= threshold.
-        store.await.retain(|_id, session| session.last_seen >= threshold);
+        SESSION_STORE.lock().await.retain(|_id, session| session.last_seen >= threshold);
     }
 
     /// Returns a list of active session IDs.
     pub async fn list_sessions() -> Vec<String> {
-        let store = SESSION_STORE.lock();
-        store.await.keys().cloned().collect()
+        SESSION_STORE.lock().await.keys().cloned().collect()
     }
 }
 
@@ -260,7 +253,7 @@ pub async fn run(
 }
 
 #[derive(Debug, Deserialize)]
-struct QueryParams {
+pub struct QueryParams {
     session: String,
 }
 
