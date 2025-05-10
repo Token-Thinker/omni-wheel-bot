@@ -9,6 +9,10 @@
             margin: 0;
             padding: 0;
             box-sizing: border-box;
+            user-select: none;
+            -webkit-user-select: none;
+            -ms-user-select: none;
+            -webkit-touch-callout: none;
         }
 
         html, body {
@@ -412,21 +416,50 @@
     WS_URL += "//" + window.location.host;
     WS_URL += currentPath.slice(0, currentPath.lastIndexOf("/") + 1) + "ws";
 
-    const RECONNECT_INTERVAL = 15000;
     const SEND_INTERVAL = 1000 / 30;
 
     class WebSocketManager {
         constructor(url) {
             this.url = url;
             this.socket = null;
+            this.shouldReconnect = true;
+            this.reconnectInterval = 3000;
+            this.maxReconnectInterval = 30000;
+            this.pingInterval=30000;
+            this.pingTimer = null;
+
+            this.sessionId = localStorage.getItem("wsSessionID") || this.generateSessionID();
+            localStorage.setItem("wsSessionID", this.sessionId);
+
+            document.addEventListener("visibilitychange", () =>{
+                if (!document.hidden && this.socket.readyState !== WebSocket.OPEN) {
+                    console.log("Page visible. Attempting to reconnect if needed.")
+                    this.initializeWebSocket();
+                }
+            });
+
             this.initializeWebSocket();
+
+        }
+
+        generateSessionID() {
+            return "session-" + Math.random().toString(36).substring(2,9)
         }
 
         initializeWebSocket() {
-            this.socket = new WebSocket(this.url, ["messages"]);
+
+            if (this.pingTimer) {
+             clearTimeout(this.pingTimer);
+             this.pingTimer = null;
+            }
+
+            const urlWithSession = this.url +"?session=" + this.sessionId;
+            this.socket = new WebSocket(urlWithSession, ["messages"]);
 
             this.socket.onopen = () => {
                 console.log('connected');
+                this.reconnectInterval = 3000;
+                this.startPing();
             };
 
             this.socket.onmessage = (event) => {
@@ -438,30 +471,58 @@
             };
 
             this.socket.onclose = () => {
-                console.log('closed');
-                this.scheduleReconnect();
+                console.log('connection closed');
+                this.stopPing();
+                if (this.shouldReconnect) {
+                    this.scheduleReconnect();
+                }
             };
         }
 
         scheduleReconnect() {
-            console.log(`Reconnecting in ${RECONNECT_INTERVAL / 1000} seconds...`);
+            console.log(`Reconnecting in ${this.reconnectInterval / 1000} seconds...`);
             setTimeout(() => {
                 if (this.socket.readyState === WebSocket.CLOSED) {
-                    console.log('Reconnecting...');
+                    console.log('Attempting to reconnect...');
                     this.initializeWebSocket();
+                    this.reconnectInterval = Math.min(this.reconnectInterval * 2, this.maxReconnectInterval);
                 }
-            }, RECONNECT_INTERVAL);
+            }, this.reconnectInterval);
+        }
+
+        startPing() {
+            this.pingTimer = setInterval(() => {
+                if (this.socket.readyState === WebSocket.OPEN) {
+                    const pingMessage = JSON.stringify({ type: "ping", session: this.sessionId });
+                    this.socket.send(pingMessage);
+                    console.log("Ping sent");
+                }
+            }, this.pingInterval);
+        }
+
+        stopPing() {
+            if (this.pingTimer) {
+                clearInterval(this.pingTimer);
+                this.pingTimer = null;
+            }
         }
 
         sendCommand(commandObj) {
             const jsonCommand = JSON.stringify(commandObj);
             console.log('Sending:', jsonCommand);
-
             if (this.socket.readyState === WebSocket.OPEN) {
                 this.socket.send(jsonCommand);
                 console.log('Sent:', jsonCommand);
             } else {
-                console.warn('Cannot send message:', jsonCommand);
+                console.warn("Cannot send message, socket not open:", jsonCommand);
+            }
+        }
+
+        disconnect() {
+            // Allow for clean disconnect without reconnection
+            this.shouldReconnect = false;
+            if (this.socket) {
+                this.socket.close();
             }
         }
 
