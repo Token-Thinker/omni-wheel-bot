@@ -9,7 +9,7 @@ extern crate alloc;
 
 use crate::utils::{
     controllers::{SystemCommand, I2C_CHANNEL, LED_CHANNEL},
-    frontend::SITE,
+    frontend::{HTML,CSS,JAVA},
 };
 use alloc::{
     vec::Vec,
@@ -202,20 +202,52 @@ pub async fn run(
     let config = config.unwrap_or(&default_config);
 
     let router = Router::new()
+        // Serve the HTML file at "/"
         .route(
             "/",
             picoserve::routing::get(|| async {
-                // Directly use a closure for the handler
+                // Serve HTML content
                 picoserve::response::Response::new(
                     StatusCode::OK,
-                    SITE, // Static content
+                    HTML, // Static HTML content
                 )
-                .with_headers([
-                    ("Content-Type", "text/html; charset=utf-8"),
-                    ("Content-Encoding", "gzip"),
-                ])
+                    .with_headers([
+                        ("Content-Type", "text/html; charset=utf-8"),
+                        ("Content-Encoding", "gzip"),
+                    ])
             }),
         )
+        // Serve the CSS file at "/style.css"
+        .route(
+            "/style.css",
+            picoserve::routing::get(|| async {
+                // Serve CSS content
+                picoserve::response::Response::new(
+                    StatusCode::OK,
+                    CSS, // Static CSS content
+                )
+                    .with_headers([
+                        ("Content-Type", "text/css; charset=utf-8"),
+                        ("Content-Encoding", "gzip"),
+                    ])
+            }),
+        )
+        // Serve the JS file at "/script.js"
+        .route(
+            "/script.js",
+            picoserve::routing::get(|| async {
+                // Serve JS content
+                picoserve::response::Response::new(
+                    StatusCode::OK,
+                    JAVA, // Static JS content
+                )
+                    .with_headers([
+                        ("Content-Type", "application/javascript; charset=utf-8"),
+                        ("Content-Encoding", "gzip"),
+                    ])
+            }),
+        )
+        // WebSocket communication on "/ws"
         .route(
             "/ws",
             picoserve::routing::get(|params: WsConnectionParams| async move {
