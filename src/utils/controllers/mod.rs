@@ -11,13 +11,14 @@
 pub(crate) mod i2c;
 
 /// Module for handling wheel kinematics calculations.
-pub mod kinematics;
+pub(crate) mod kinematics;
 pub(crate) mod leds;
 
 // Re-export for easier access
 pub use i2c::*;
-pub use kinematics::*;
 pub use leds::*;
+pub(crate) use kinematics::*;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]

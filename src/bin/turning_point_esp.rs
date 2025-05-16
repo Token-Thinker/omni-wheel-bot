@@ -2,8 +2,6 @@
 #![no_main]
 extern crate alloc;
 
-// Module imports
-mod utils;
 // Standard imports
 use core::cell::RefCell;
 use heapless::String;
@@ -32,10 +30,11 @@ use esp_wifi::{
 };
 use log::LevelFilter;
 //Internal Modules
-use utils::{
+use omni_wheel::{smart_led_buffer, utils::{
     connection::app_server,
     controllers::{I2CDevices, LedModule, I2C_CHANNEL, LED_CHANNEL},
-    packages::SmartLedsAdapter,
+    packages::smart_leds::SmartLedsAdapter,
+    }
 };
 
 // Static memory allocation macro
@@ -108,11 +107,11 @@ async fn main(spawner: Spawner) -> ! {
         } else {
             let freq = Rate::from_mhz(80);
         }
-    };
+    }
 
 
     let rmt = Rmt::new(peripherals.RMT, freq).unwrap();
-    let rmt_buffer = smartLedBuffer!(2);
+    let rmt_buffer = smart_led_buffer!(2);
     let adapter = SmartLedsAdapter::new(rmt.channel0, peripherals.GPIO12, rmt_buffer);
     let leds = LedModule::new(adapter);
 

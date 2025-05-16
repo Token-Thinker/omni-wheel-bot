@@ -10,10 +10,10 @@
 //!   management.
 
 /// Module for managing network connections and communication protocols.
-pub(crate) mod connection;
+pub mod connection;
 /// Module for handling hardware controllers, such as motors and sensors.
-pub(crate) mod controllers;
+pub mod controllers;
 /// Module for handling user interface and user input.
 pub(crate) mod frontend;
 /// Module for handling communication packages and their management.
-pub(crate) mod packages;
+pub mod packages;

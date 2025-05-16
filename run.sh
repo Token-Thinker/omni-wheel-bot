@@ -1,250 +1,203 @@
 #!/usr/bin/env bash
-
 set -euo pipefail
 
-# Ensure script is run with sudo/admin privileges
-if [[ $EUID -ne 0 ]]; then
-    echo "This script requires administrative privileges to access serial ports and manage Docker containers."
-    exec sudo -p "Enter your password to run this script with admin privileges: " bash "$0" "$@"
-fi
+# Color constants
+RED='\033[0;31m' GREEN='\033[0;32m' YELLOW='\033[0;33m'
+BLUE='\033[0;34m' BOLD='\033[1m' RESET='\033[0m'
 
-cat <<-EOF
-
-    ┌──────────────────────────────────────────────────────────────────┐
-    │  Why we ask for your Wi‑Fi password:                            │
-    │    • It’s injected only into this script’s environment          │
-    │      (so your firmware can embed SSID/PASSWORD at build/run).   │
-    │    • We do NOT write it to any file or git — it lives purely    │
-    │      in memory for the duration of this run.                    │
-    └──────────────────────────────────────────────────────────────────┘
-
-EOF
-
-# Prompt for Wi‑Fi credentials (they're only kept in memory; not written to any file)
-read -p "Enter Wi‑Fi SSID: " SSID
-read -s -p "Enter Wi‑Fi Password: " PASSWORD
-echo
-export SSID PASSWORD
-
-# Function to display usage information
-function usage() {
-    echo "Usage: ${0} [options]"
-    echo ""
-    echo "Options:"
-    echo "  -b, --build         Only build the firmware, skip flashing and monitoring."
-    echo "  -f, --flash          Only flash the firmware, skip building and monitoring."
-    echo "  -m, --monitor       Only start monitoring using screen, skip building and flashing."
-    echo "  -h, --help          Display this help message."
-    exit 0
-}
-
-# Default actions: perform build and flash by default unless specified otherwise
+#
+# 1) Parse args up front
+#
 BUILD=true
 FLASH=true
 MONITOR=false
 
-# Parse command-line arguments
+function usage() {
+    echo -e "${BOLD}Usage:${RESET} $0 [options]"
+    echo
+    echo -e "${BOLD}Options:${RESET}"
+    echo -e "  ${YELLOW}-b, --build${RESET}   Build only (no flash, no monitor)"
+    echo -e "  ${YELLOW}-f, --flash${RESET}   Flash only (no build, no monitor)"
+    echo -e "  ${YELLOW}-m, --monitor${RESET} Monitor only (no build, no flash)"
+    echo -e "  ${YELLOW}-h, --help${RESET}    Show this help"
+    exit 0
+}
+
 while [[ $# -gt 0 ]]; do
-    case "${1}" in
-        -h|--help)
-            usage
-            ;;
-        -b|--build)
-            BUILD=true
-            FLASH=false
-            MONITOR=false
-            shift
-            ;;
-        -f|--flash)
-            BUILD=false
-            FLASH=true
-            MONITOR=false
-            shift
-            ;;
-        -m|--monitor)
-            BUILD=false
-            FLASH=false
-            MONITOR=true
-            shift
-            ;;
-        --build=true)
-            BUILD=true
-            shift
-            ;;
-        --build=false)
-            BUILD=false
-            shift
-            ;;
-        --flash=true)
-            FLASH=true
-            shift
-            ;;
-        --flash=false)
-            FLASH=false
-            shift
-            ;;
-        *)
-            echo "Unknown option: ${1}"
-            usage
-            ;;
+    case $1 in
+        -h|--help)    usage ;;
+        -b|--build)   BUILD=true;  FLASH=false; MONITOR=false; shift ;;
+        -f|--flash)   BUILD=false; FLASH=true;  MONITOR=false; shift ;;
+        -m|--monitor) BUILD=false; FLASH=false; MONITOR=true;  shift ;;
+        *) echo -e "${RED}Unknown option:${RESET} $1"; usage ;;
     esac
 done
 
-# Utility function to check if a command exists
-function command_exists() {
-    command -v "${1}" >/dev/null 2>&1
-}
-
-# Verify Docker installation
-if ! command_exists docker; then
-    echo "Error: Docker is not installed or not found in PATH."
-    echo "Please install Docker from https://www.docker.com/get-started and ensure it's running."
-    exit 1
+#
+# 2) If we're building, ensure sudo
+#
+if $BUILD && [[ $EUID -ne 0 ]]; then
+    echo -e "${YELLOW}⚙️  Building requires admin privileges.${RESET}"
+    exec sudo -p "Enter your password to build: " bash "$0" "$@"
 fi
 
-# Prompt for target board before build
-BOARD_OPTIONS=("esp32" "esp32c2" "esp32c3" "esp32c6" "esp32h2" "esp32p4" "esp32s2" "esp32s3")
-echo "Select the target board (this will enable the corresponding Cargo feature):"
-PS3="Enter choice [1-${#BOARD_OPTIONS[@]}]: "
-select BOARD in "${BOARD_OPTIONS[@]}"; do
-    if [[ -n "$BOARD" ]]; then
-        echo "→ Selected board: $BOARD"
-        break
-    else
-        echo "Invalid selection. Please try again."
+#
+# 3) Ensure root sees your cargo bin
+#
+if [[ -n "${SUDO_USER-}" ]]; then
+    USER_HOME=$(eval echo "~$SUDO_USER")
+    export PATH="$USER_HOME/.cargo/bin:$PATH"
+else
+    export PATH="$HOME/.cargo/bin:$PATH"
+fi
+
+#
+# 4) Wi-Fi creds only for builds
+#
+if $BUILD; then
+    echo -e "${BLUE}${BOLD}▶ Why we ask for your Wi-Fi password${RESET}"
+    echo -e "  • Injected only into this script’s environment"
+    echo -e "  • Never written to disk or git"
+    echo
+
+    read -p "$(echo -e ${YELLOW}"Enter Wi-Fi SSID:${RESET} ")" SSID
+    read -s -p "$(echo -e ${YELLOW}"Enter Wi-Fi Password:${RESET} ")" PASSWORD
+    echo
+    export SSID PASSWORD
+
+    # Check Docker
+    if ! command -v docker &>/dev/null; then
+        echo -e "${RED}Error:${RESET} Docker not found. Please install & start Docker."
+        exit 1
     fi
-done
+    echo
+fi
 
-# Function to detect serial port
-function detect_serial_port() {
-    # shellcheck disable=SC2155
-    local OS_TYPE="$(uname)"
+#
+# 5) Board & Bin only if build or flash
+#
+if $BUILD || $FLASH; then
+    echo -e "${BLUE}${BOLD}▶ Select target board:${RESET}"
+    BOARD_OPTIONS=(esp32 esp32c2 esp32c3 esp32c6 esp32h2 esp32p4 esp32s2 esp32s3)
+    PS3="$(echo -e ${YELLOW}"Choice [1-${#BOARD_OPTIONS[@]}]:${RESET} ")"
+    select BOARD in "${BOARD_OPTIONS[@]}"; do
+        [[ -n "$BOARD" ]] && break
+        echo -e "${RED}Invalid selection.${RESET} Try again."
+    done
 
-    declare -a PORTS=()
+    declare -A TARGET_TRIPLES=(
+      [esp32]=xtensa-esp32-none-elf
+      [esp32c2]=riscv32imc-unknown-none-elf
+      [esp32c3]=riscv32imc-unknown-none-elf
+      [esp32c6]=riscv32imac-unknown-none-elf
+      [esp32h2]=riscv32imac-unknown-none-elf
+      [esp32p4]=xtensa-esp32p4-none-elf
+      [esp32s2]=xtensa-esp32s2-none-elf
+      [esp32s3]=xtensa-esp32s3-none-elf
+    )
+    TRIPLE="${TARGET_TRIPLES[$BOARD]}"
+    [[ -n "$TRIPLE" ]] || { echo -e "${RED}❌ Unknown board '$BOARD'${RESET}"; exit 1; }
 
-    if [[ "$OS_TYPE" == "Darwin" ]]; then
-        # macOS: Look for /dev/cu.usbserial*
-        PORTS+=( "$(ls /dev/cu.usbserial* 2> /dev/null)" )
-    elif [[ "$OS_TYPE" == "Linux" ]]; then
-        # Linux: Look for /dev/ttyUSB*
-        PORTS+=("$(ls /dev/ttyUSB* 2> /dev/null)")
+    echo
+    echo -e "${BLUE}${BOLD}▶ Select firmware binary:${RESET}"
+    mapfile -t BIN_OPTIONS < <(cd src/bin && ls *.rs | sed 's/\.rs$//')
+    PS3="$(echo -e ${YELLOW}"Choice [1-${#BIN_OPTIONS[@]}]:${RESET} ")"
+    select BIN in "${BIN_OPTIONS[@]}"; do
+        [[ -n "$BIN" ]] && break
+        echo -e "${RED}Invalid selection.${RESET} Try again."
+    done
+    echo
+fi
+
+#
+# 6) Serial-port detector (host side)
+#
+detect_serial_port() {
+    OS=$(uname)
+    local OS
+    local candidates=( )
+    if [[ "$OS" == "Darwin" ]]; then
+        candidates=(/dev/cu.* /dev/tty.*)
     else
-        echo "Unsupported OS: ${OS_TYPE}"
-        echo "Please specify the serial port manually."
-        return 1
+        candidates=(/dev/ttyUSB* /dev/ttyACM*)
     fi
 
-    if [[ ${#PORTS[@]} -eq 0 ]]; then
-        echo "No serial ports found matching expected patterns."
-        return 1
-    elif [[ ${#PORTS[@]} -eq 1 ]]; then
-        echo "${PORTS[0]}"
-        return 0
-    else
-        echo "Multiple serial ports found:"
-        for i in "${!PORTS[@]}"; do
-            echo "  [$i] ${PORTS[$i]}"
+    local ports=( )
+    for p in "${candidates[@]}"; do
+        [[ -e "$p" ]] && ports+=("$p")
+    done
+
+    if (( ${#ports[@]} == 1 )); then
+        echo "${ports[0]}"
+    elif (( ${#ports[@]} > 1 )); then
+        echo -e "${YELLOW}Multiple ports found:${RESET}"
+        for i in "${!ports[@]}"; do
+            printf "  [%d] %s\n" "$i" "${ports[$i]}"
         done
-        read -p "Select the port number to use: " PORT_INDEX
-        if [[ "${PORT_INDEX}" =~ ^[0-9]+$ ]] && [[ "${PORT_INDEX}" -ge 0 && "${PORT_INDEX}" -lt ${#PORTS[@]} ]]; then
-            echo "${PORTS[${PORT_INDEX}]}"
-            return 0
-        else
-            echo "Invalid selection."
-            return 1
-        fi
+        read -p "$(echo -e ${YELLOW}"Select port #:${RESET} ")" idx
+        echo "${ports[$idx]}"
+    else
+        return 1
     fi
 }
 
-# Build Phase
+#
+# 7) Build only (no in-container flash)
+#
 if $BUILD; then
-    echo "=============================="
-    echo "        Building Project"
-    echo "=============================="
-
-    echo "Building firmware for board '$BOARD' in Docker container..."
-    docker run \
-      -it \
+    echo -e "${GREEN}${BOLD}=== BUILD PHASE (${BOARD}/${BIN}) ===${RESET}"
+    docker pull espressif/idf-rust:all_latest
+    docker run -it \
       -v "$(pwd)":/workspace \
       -e SSID="${SSID}" \
       -e PASSWORD="${PASSWORD}" \
       -e LIBCLANG_PATH="/home/esp/.rustup/toolchains/esp/xtensa-esp32-elf-clang/esp-18.1.2_20240912/esp-clang/lib" \
       -e PATH="/home/esp/.rustup/toolchains/esp/xtensa-esp-elf/esp-14.2.0_20240906/xtensa-esp-elf/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/esp/.cargo/bin" \
       --rm \
-      --workdir='/workspace' \
-      --name='omni-wheel-bot-builder' \
-      --entrypoint='rustup' \
+      --workdir=/workspace \
+      --entrypoint=rustup \
       docker.io/espressif/idf-rust:esp32_1.84.0.0 \
-      run esp cargo build --release \
-        --target xtensa-esp32-none-elf \
-        --features "${BOARD}"
-
-    echo "=============================="
-    echo "         Build Complete"
-    echo "=============================="
+      run esp cargo "$BOARD" --bin "$BIN"
+    echo -e "${GREEN}${BOLD}=== BUILD COMPLETE ===${RESET}"
+    echo
 fi
 
-# Flash Phase
+#
+# 8) Flash on host (after build)
+#
 if $FLASH; then
-    echo "=============================="
-    echo "        Flashing Firmware"
-    echo "=============================="
-
-    if ! command_exists espflash; then
-        echo "Error: 'espflash' is not installed."
-        echo "Please install it using one of the following methods:"
-        echo "  - Via Cargo: cargo install espflash"
-        exit 1
-    fi
-
-    PORT=$(detect_serial_port) || {
-        echo "Attempting manual port entry."
-        read -p "Enter the serial port (e.g., /dev/cu.usbserial-A50285BI or /dev/ttyUSB0): " PORT
-        if [[ -z "$PORT" ]]; then
-            echo "No serial port specified. Exiting."
-            exit 1
-        fi
+    echo -e "${GREEN}${BOLD}=== FLASH PHASE (host) ===${RESET}"
+    command -v espflash &>/dev/null || {
+      echo -e "${RED}Please install espflash:${RESET} cargo install espflash"
+      exit 1
     }
 
-    echo "Using serial port: $PORT"
-    FIRMWARE_PATH="target/xtensa-esp32-none-elf/release/omni-wheel"
+    PORT=$(detect_serial_port) || {
+      read -p "$(echo -e ${YELLOW}"Serial port (e.g. /dev/ttyUSB0):${RESET} ")" PORT
+      [[ -n "$PORT" ]] || { echo "No port, abort."; exit 1; }
+    }
 
-    if [[ ! -f "${FIRMWARE_PATH}" ]]; then
-        echo "Error: Firmware file '${FIRMWARE_PATH}' does not exist."
-        echo "Please ensure the build phase completed successfully."
-        exit 1
-    fi
+    FIRMWARE="target/${TRIPLE}/release/${BIN}"
+    [[ -f "$FIRMWARE" ]] || { echo -e "${RED}Missing $FIRMWARE${RESET}"; exit 1; }
 
-    # Flash the firmware
-    echo "Flashing firmware to ${BOARD} on $PORT..."
-    espflash flash --port "$PORT" "${FIRMWARE_PATH}"
-
-    echo "=============================="
-    echo "         Flash Complete"
-    echo "=============================="
+    espflash flash --port "$PORT" "$FIRMWARE"
+    echo -e "${GREEN}${BOLD}=== FLASH COMPLETE ===${RESET}"
+    echo
 fi
 
-# Monitor Phase
+#
+# 9) Monitor only
+#
 if $MONITOR; then
-    echo "=============================="
-    echo "         Starting Monitor"
-    echo "=============================="
-
-    if ! command_exists screen; then
-        echo "Warning: 'screen' is not installed. Install it to view serial output."
-        exit 1
-    fi
-
-    PORT=$(detect_serial_port) || {
-        echo "Attempting manual port entry for monitoring."
-        read -p "Enter the serial port for monitoring: " PORT
-        if [[ -z "$PORT" ]]; then
-            echo "No serial port specified. Exiting."
-            exit 1
-        fi
+    echo -e "${GREEN}${BOLD}=== MONITOR ===${RESET}"
+    command -v screen &>/dev/null || {
+      echo -e "${RED}Install screen to monitor serial.${RESET}"
+      exit 1
     }
-
-    echo "Starting screen monitor on port $PORT at 115200 baud..."
-    export TERM=xterm
+    PORT=$(detect_serial_port) || {
+      read -p "$(echo -e ${YELLOW}"Serial port:${RESET} ")" PORT
+      [[ -n "$PORT" ]] || exit 1
+    }
     screen "$PORT" 115200
+    echo
 fi

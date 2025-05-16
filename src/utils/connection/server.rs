@@ -195,6 +195,7 @@ pub async fn run(
 ) -> ! {
     let default_config = picoserve::Config::new(picoserve::Timeouts {
         start_read_request: Some(Duration::from_secs(5)),
+        persistent_start_read_request: None,
         read_request: Some(Duration::from_secs(1)),
         write: Some(Duration::from_secs(5)),
     });
