@@ -78,7 +78,8 @@ fi
 #
 if $BUILD || $FLASH; then
     echo -e "${BLUE}${BOLD}▶ Select target board:${RESET}"
-    BOARD_OPTIONS=(esp32 esp32c2 esp32c3 esp32c6 esp32h2 esp32p4 esp32s2 esp32s3)
+    BOARD_OPTIONS=(esp32 esp32s3)
+    #BOARD_OPTIONS=(esp32 esp32c2 esp32c3 esp32c6 esp32h2 esp32p4 esp32s2 esp32s3)
     PS3="$(echo -e ${YELLOW}"Choice [1-${#BOARD_OPTIONS[@]}]:${RESET} ")"
     select BOARD in "${BOARD_OPTIONS[@]}"; do
         [[ -n "$BOARD" ]] && break
@@ -113,8 +114,8 @@ fi
 # 6) Serial-port detector (host side)
 #
 detect_serial_port() {
-    OS=$(uname)
-    local OS
+    # shellcheck disable=SC2155
+    local OS=$(uname)
     local candidates=( )
     if [[ "$OS" == "Darwin" ]]; then
         candidates=(/dev/cu.* /dev/tty.*)
@@ -180,7 +181,7 @@ if $FLASH; then
     FIRMWARE="target/${TRIPLE}/release/${BIN}"
     [[ -f "$FIRMWARE" ]] || { echo -e "${RED}Missing $FIRMWARE${RESET}"; exit 1; }
 
-    espflash flash --port "$PORT" "$FIRMWARE"
+    espflash flash --monitor --port "$PORT" "$FIRMWARE"
     echo -e "${GREEN}${BOLD}=== FLASH COMPLETE ===${RESET}"
     echo
 fi
