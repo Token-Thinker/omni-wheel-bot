@@ -16,8 +16,8 @@ pub(crate) mod leds;
 
 // Re-export for easier access
 pub use i2c::*;
-pub use leds::*;
 pub(crate) use kinematics::*;
+pub use leds::*;
 
 use serde::{Deserialize, Serialize};
 

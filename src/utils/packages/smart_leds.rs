@@ -144,7 +144,10 @@ where
     /// Convert all RGB8 items of the iterator to the RMT format and
     /// add them to internal buffer, then start a singular RMT operation
     /// based on that buffer.
-    fn write<T, I>(&mut self, iterator: T) -> Result<(), Self::Error>
+    fn write<T, I>(
+        &mut self,
+        iterator: T,
+    ) -> Result<(), Self::Error>
     where
         T: IntoIterator<Item = I>,
         I: Into<Self::Color>,

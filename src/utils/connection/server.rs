@@ -9,24 +9,26 @@ extern crate alloc;
 
 use crate::utils::{
     controllers::{SystemCommand, I2C_CHANNEL, LED_CHANNEL},
-    frontend::{HTML,CSS,JAVA},
+    frontend::{CSS, HTML, JAVA},
 };
-use alloc::{
-    vec::Vec,
-    string::String};
+use alloc::{string::String, vec::Vec};
 
 use embassy_net::Stack;
-use embassy_sync::{
-    mutex::Mutex,
-    blocking_mutex::raw::CriticalSectionRawMutex};
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use embassy_time::Duration;
 use embedded_io_async::Read;
 use hashbrown::HashMap;
 use lazy_static::lazy_static;
 use picoserve::{
-  io::embedded_io_async as embedded_aio, 
-  response::ws::{Message, ReadMessageError, SocketRx, SocketTx, WebSocketCallback, WebSocketUpgrade},
-  response::StatusCode, extract::FromRequest, Router, request::{RequestParts, RequestBody}, url_encoded::deserialize_form
+    extract::FromRequest,
+    io::embedded_io_async as embedded_aio,
+    request::{RequestBody, RequestParts},
+    response::ws::{
+        Message, ReadMessageError, SocketRx, SocketTx, WebSocketCallback, WebSocketUpgrade,
+    },
+    response::StatusCode,
+    url_encoded::deserialize_form,
+    Router,
 };
 
 use serde::Deserialize;
@@ -177,7 +179,10 @@ impl SessionManager {
     /// For example, pass in a timestamp and any session with last_seen less than that value will be removed.
     pub async fn purge_stale_sessions(threshold: u64) {
         // Retain sessions that have a last_seen timestamp >= threshold.
-        SESSION_STORE.lock().await.retain(|_id, session| session.last_seen >= threshold);
+        SESSION_STORE
+            .lock()
+            .await
+            .retain(|_id, session| session.last_seen >= threshold);
     }
 
     /// Returns a list of active session IDs.
@@ -212,10 +217,10 @@ pub async fn run(
                     StatusCode::OK,
                     HTML, // Static HTML content
                 )
-                    .with_headers([
-                        ("Content-Type", "text/html; charset=utf-8"),
-                        ("Content-Encoding", "gzip"),
-                    ])
+                .with_headers([
+                    ("Content-Type", "text/html; charset=utf-8"),
+                    ("Content-Encoding", "gzip"),
+                ])
             }),
         )
         // Serve the CSS file at "/style.css"
@@ -227,10 +232,10 @@ pub async fn run(
                     StatusCode::OK,
                     CSS, // Static CSS content
                 )
-                    .with_headers([
-                        ("Content-Type", "text/css; charset=utf-8"),
-                        ("Content-Encoding", "gzip"),
-                    ])
+                .with_headers([
+                    ("Content-Type", "text/css; charset=utf-8"),
+                    ("Content-Encoding", "gzip"),
+                ])
             }),
         )
         // Serve the JS file at "/script.js"
@@ -242,10 +247,10 @@ pub async fn run(
                     StatusCode::OK,
                     JAVA, // Static JS content
                 )
-                    .with_headers([
-                        ("Content-Type", "application/javascript; charset=utf-8"),
-                        ("Content-Encoding", "gzip"),
-                    ])
+                .with_headers([
+                    ("Content-Type", "application/javascript; charset=utf-8"),
+                    ("Content-Encoding", "gzip"),
+                ])
             }),
         )
         // WebSocket communication on "/ws"
@@ -256,7 +261,10 @@ pub async fn run(
                 tracing::info!("New WebSocket connection with session id: {}", session_id);
                 let now = embassy_time::Instant::now().as_secs();
                 SessionManager::create_session(session_id.clone(), now).await;
-                params.upgrade.on_upgrade(WebSocket).with_protocol("messages")
+                params
+                    .upgrade
+                    .on_upgrade(WebSocket)
+                    .with_protocol("messages")
             }),
         );
 
@@ -280,7 +288,7 @@ pub async fn run(
         &mut rx_buffer,
         &mut tx_buffer,
         &mut http_buffer,
-        &()
+        &(),
     )
     .await
 }
@@ -304,13 +312,14 @@ impl<'r, S> FromRequest<'r, S> for WsConnectionParams {
         body: RequestBody<'r, R>,
     ) -> Result<Self, Self::Rejection> {
         // First extract the WebSocketUpgrade as usual.
-        let upgrade = WebSocketUpgrade::from_request(state, parts.clone(), body).await
+        let upgrade = WebSocketUpgrade::from_request(state, parts.clone(), body)
+            .await
             .map_err(|_| "Failed to extract WebSocketUpgrade")?;
 
         // Then extract the query string for QueryParams.
         let query_str = parts.query().ok_or("Missing query parameters")?;
-        let query = deserialize_form::<QueryParams>(query_str)
-            .map_err(|_| "Invalid query parameters")?;
+        let query =
+            deserialize_form::<QueryParams>(query_str).map_err(|_| "Invalid query parameters")?;
 
         if query.session.is_empty() {
             return Err("Session ID is required");

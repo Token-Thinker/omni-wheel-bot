@@ -17,24 +17,24 @@ use esp_hal::{
     i2c::master::{Config, I2c},
     rmt::{Channel, Rmt},
     rng::Rng,
+    time::Rate,
     timer::timg::TimerGroup,
     Blocking,
-    time::Rate,
 };
 use esp_wifi::{
     init,
-    wifi::{
-        ClientConfiguration, Configuration, WifiController, WifiDevice, WifiEvent, WifiState,
-    },
+    wifi::{ClientConfiguration, Configuration, WifiController, WifiDevice, WifiEvent, WifiState},
     EspWifiController,
 };
 use log::LevelFilter;
 //Internal Modules
-use omni_wheel::{smart_led_buffer, utils::{
-    connection::app_server,
-    controllers::{I2CDevices, LedModule, I2C_CHANNEL, LED_CHANNEL},
-    packages::smart_leds::SmartLedsAdapter,
-    }
+use omni_wheel::{
+    smart_led_buffer,
+    utils::{
+        connection::app_server,
+        controllers::{I2CDevices, LedModule, I2C_CHANNEL, LED_CHANNEL},
+        packages::smart_leds::SmartLedsAdapter,
+    },
 };
 
 // Static memory allocation macro
@@ -59,21 +59,20 @@ static DEVICES: static_cell::StaticCell<Option<I2CDevices<'static, I2c<'static, 
 
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) -> ! {
-
     // General Configuration Block *****************************************************************
     esp_println::logger::init_logger(LevelFilter::Trace);
     tracing::info!("Logger initialized");
-    
+
     let esp_config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(esp_config);
 
     esp_alloc::heap_allocator!(size: 72 * 1024);
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
-    
+
     let mut rng = Rng::new(peripherals.RNG);
     // End of General Configuration Block **********************************************************
-    
+
     //Peripherals Configuration ********************************************************************
     let sda_per = peripherals.GPIO21;
     let scl_per = peripherals.GPIO22;
@@ -109,21 +108,18 @@ async fn main(spawner: Spawner) -> ! {
         }
     }
 
-
     let rmt = Rmt::new(peripherals.RMT, freq).unwrap();
     let rmt_buffer = smart_led_buffer!(2);
     let adapter = SmartLedsAdapter::new(rmt.channel0, peripherals.GPIO12, rmt_buffer);
     let leds = LedModule::new(adapter);
 
-
-    
     // Wi-Fi Configuration Block *******************************************************************
     let esp_wifi_ctrl = &*mk_static!(
         EspWifiController<'static>,
         init(timg0.timer0, rng.clone(), peripherals.RADIO_CLK).unwrap()
     );
 
-    let(controller, interfaces) = esp_wifi::wifi::new(&esp_wifi_ctrl, peripherals.WIFI).unwrap();
+    let (controller, interfaces) = esp_wifi::wifi::new(&esp_wifi_ctrl, peripherals.WIFI).unwrap();
 
     let wifi_sta_device = interfaces.sta;
     let dhcpv_config = {
@@ -146,7 +142,7 @@ async fn main(spawner: Spawner) -> ! {
     }
 
     let sta_config = embassy_net::Config::dhcpv4(dhcpv_config);
-    
+
     let seed = (rng.random() as u64) << 32 | rng.random() as u64;
 
     // Init network stack
@@ -160,12 +156,12 @@ async fn main(spawner: Spawner) -> ! {
 
     spawner.spawn(connection(controller)).ok();
     spawner.spawn(net_task(sta_runner)).ok();
-    
+
     wait_for_network(&sta_stack).await;
-    
+
     spawner.spawn(handle_i2c_message(devices)).unwrap();
     spawner.spawn(handle_leds_message(leds)).unwrap();
-    
+
     app_server(0, 80, sta_stack, None).await;
 }
 
