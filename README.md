@@ -28,11 +28,11 @@ to create a fun and interactive toy for my friends and family.
 This application is guaranteed to compile when using the latest stable Rust version at the time of release. 
 It _might_ compile with older versions, but that may change in any new release, including patches.
 
-**_Note_**: this application leverages Docker to carry out environment details -> refer [Dockerfile](Dockerfile)
+**_Note_**: this application leverages Docker to carry out environment details → refer [Dockerfile](Dockerfile)
 
 ## Getting Started
 
-Run file automatically `Builds`, `Flash`, and `Monitors` on _run_
+execute `run.sh` automatically `Builds`, `Flash`, and `Monitors`
 
   ```bash
   # run file must be executable
@@ -46,5 +46,5 @@ Run file automatically `Builds`, `Flash`, and `Monitors` on _run_
 
 Licensed under either of:
 
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
-- MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
+- Apache License, Version 2.0 (http://www.apache.org/licenses/LICENSE-2.0)
+- MIT license (http://opensource.org/licenses/MIT)
