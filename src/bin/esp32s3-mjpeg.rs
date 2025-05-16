@@ -1,9 +1,14 @@
+#![feature(impl_trait_in_assoc_type)]
+#![feature(allocator_api)]
+
 #![no_std]
 #![no_main]
 
 // https://github.com/espressif/esp32-camera/pull/701/files#diff-a6a9b97c4bf45ceae4a2e05e9032fe34fae7360a35457bc8158c7c816f092ef5R296-R297
 // https://docs.m5stack.com/en/unit/Unit-CAMS3%205MP
 // https://github.com/m5stack/UnitCamS3-UserDemo/blob/unitcams3-5mp/platforms/unitcam_s3_5mp/components/esp32-camera/sensors/mega_ccm.c
+
+use esp_backtrace as _;
 
 use alloc::vec::Vec;
 use core::cell::RefCell;
@@ -186,7 +191,7 @@ async fn run_server(
             ChunkedResponse::new(ImageStream { camera: &camera })
         }),
     );
-
+    
     let mut tx_buf = Vec::new_in(&PSRAM_HEAP);
     tx_buf.resize(10 * 1024, 0);
 
