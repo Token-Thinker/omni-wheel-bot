@@ -8,7 +8,8 @@ use libm;
 /// of a three-wheeled omni-wheel robot, including wheel positioning, robot
 /// size, and methods for computing velocities and constructing a Jacobian
 /// matrix.
-pub struct WheelKinematics {
+pub struct WheelKinematics
+{
     /// Radius of each wheel in meters.
     wheel_radius: f32,
     /// Distance from the robot's center to each wheel in meters.
@@ -18,7 +19,8 @@ pub struct WheelKinematics {
     wheel_angles: [f32; 3],
 }
 
-impl WheelKinematics {
+impl WheelKinematics
+{
     /// Creates a new `WheelKinematics` instance.
     ///
     /// # Parameters
@@ -31,7 +33,8 @@ impl WheelKinematics {
     pub fn new(
         wheel_radius: f32,
         robot_radius: f32,
-    ) -> Self {
+    ) -> Self
+    {
         let wheel_angles = [PI / 3.0, PI, 5.0 * PI / 3.0];
         Self {
             wheel_radius,
@@ -56,7 +59,8 @@ impl WheelKinematics {
         speed: f32,
         angle: f32,
         orientation: f32,
-    ) -> (f32, f32) {
+    ) -> (f32, f32)
+    {
         let angle_rad = angle * (PI / 180.0);
         let orientation_rad = orientation * (PI / 180.0);
 
@@ -80,7 +84,8 @@ impl WheelKinematics {
     /// # Returns
     /// A 3x3 Jacobian matrix relating robot body-frame velocities to wheel
     /// velocities.
-    pub fn construct_jacobian(&self) -> [[f32; 3]; 3] {
+    pub fn construct_jacobian(&self) -> [[f32; 3]; 3]
+    {
         let r = self.wheel_radius;
         let l = self.robot_radius;
 
@@ -91,6 +96,23 @@ impl WheelKinematics {
             j[i][2] = l / r;
         }
         j
+    }
+
+    /// From measured wheel speeds [ω₁,ω₂,ω₃] → body‐frame (vx, vy, ω_body).
+    pub fn compute_body_velocity(
+        &self,
+        wheel_vels: [f32; 3],
+    ) -> (f32, f32, f32)
+    {
+        let j = self.construct_jacobian();
+        let inv_j = invert_3x3(j);
+        let vx =
+            inv_j[0][0] * wheel_vels[0] + inv_j[0][1] * wheel_vels[1] + inv_j[0][2] * wheel_vels[2];
+        let vy =
+            inv_j[1][0] * wheel_vels[0] + inv_j[1][1] * wheel_vels[1] + inv_j[1][2] * wheel_vels[2];
+        let omega =
+            inv_j[2][0] * wheel_vels[0] + inv_j[2][1] * wheel_vels[1] + inv_j[2][2] * wheel_vels[2];
+        (vx, vy, omega)
     }
 
     /// Computes the required wheel velocities based on the desired robot
@@ -113,7 +135,8 @@ impl WheelKinematics {
         angle: f32,
         orientation: f32,
         omega: f32,
-    ) -> [f32; 3] {
+    ) -> [f32; 3]
+    {
         let (v_bx, v_by) = Self::convert_to_body_frame(speed, angle, orientation);
         let v = [v_bx, v_by, omega];
         let j = self.construct_jacobian();
@@ -124,10 +147,12 @@ impl WheelKinematics {
         fn clamp_small(
             value: f32,
             epsilon: f32,
-        ) -> f32 {
+        ) -> f32
+        {
             if value.abs() < epsilon {
                 0.0
-            } else {
+            }
+            else {
                 value
             }
         }
@@ -138,4 +163,30 @@ impl WheelKinematics {
         }
         wheel_velocities
     }
+}
+
+/// Invert a 3×3 matrix (unrolled cofactor formula).
+fn invert_3x3(m: [[f32; 3]; 3]) -> [[f32; 3]; 3]
+{
+    let det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+        - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+        + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+    let inv_det = 1.0 / det;
+    [
+        [
+            (m[1][1] * m[2][2] - m[1][2] * m[2][1]) * inv_det,
+            -(m[0][1] * m[2][2] - m[0][2] * m[2][1]) * inv_det,
+            (m[0][1] * m[1][2] - m[0][2] * m[1][1]) * inv_det,
+        ],
+        [
+            -(m[1][0] * m[2][2] - m[1][2] * m[2][0]) * inv_det,
+            (m[0][0] * m[2][2] - m[0][2] * m[2][0]) * inv_det,
+            -(m[0][0] * m[1][2] - m[0][2] * m[1][0]) * inv_det,
+        ],
+        [
+            (m[1][0] * m[2][1] - m[1][1] * m[2][0]) * inv_det,
+            -(m[0][0] * m[2][1] - m[0][1] * m[2][0]) * inv_det,
+            (m[0][0] * m[1][1] - m[0][1] * m[1][0]) * inv_det,
+        ],
+    ]
 }

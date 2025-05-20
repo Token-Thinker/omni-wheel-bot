@@ -9,25 +9,27 @@ use esp_hal::{
 use smart_leds_trait::{SmartLedsWrite, RGB8};
 
 const SK68XX_CODE_PERIOD: u32 = 1250; // 800kHz
-const SK68XX_T0H_NS: u32 = 400; // 300ns per SK6812 datasheet, 400 per WS2812. Some require >350ns for T0H. Others <500ns for T0H.
+const SK68XX_T0H_NS: u32 = 400; // 300ns per SK6812 datasheet, 400 per WS2812. Some require >350ns for T0H.
+                                // Others <500ns for T0H.
 const SK68XX_T0L_NS: u32 = SK68XX_CODE_PERIOD - SK68XX_T0H_NS;
-const SK68XX_T1H_NS: u32 = 850; // 900ns per SK6812 datasheet, 850 per WS2812. > 550ns is sometimes enough. Some require T1H >= 2 * T0H. Some require > 300ns T1L.
+const SK68XX_T1H_NS: u32 = 850; // 900ns per SK6812 datasheet, 850 per WS2812. > 550ns is sometimes enough. Some
+                                // require T1H >= 2 * T0H. Some require > 300ns T1L.
 const SK68XX_T1L_NS: u32 = SK68XX_CODE_PERIOD - SK68XX_T1H_NS;
 
 /// All types of errors that can happen during the conversion and transmission
 /// of LED commands
 #[derive(Debug)]
-pub enum LedAdapterError {
+pub enum LedAdapterError
+{
     /// Raised in the event that the provided data container is not large enough
     BufferSizeExceeded,
     /// Raised if something goes wrong in the transmission,
     TransmissionError(RmtError),
 }
 
-impl From<RmtError> for LedAdapterError {
-    fn from(e: RmtError) -> Self {
-        LedAdapterError::TransmissionError(e)
-    }
+impl From<RmtError> for LedAdapterError
+{
+    fn from(e: RmtError) -> Self { LedAdapterError::TransmissionError(e) }
 }
 
 /// Macro to allocate a buffer sized for a specific number of LEDs to be
@@ -109,7 +111,8 @@ where
         value: RGB8,
         mut_iter: &mut IterMut<u32>,
         pulses: (u32, u32),
-    ) -> Result<(), LedAdapterError> {
+    ) -> Result<(), LedAdapterError>
+    {
         Self::convert_rgb_channel_to_pulses(value.g, mut_iter, pulses)?;
         Self::convert_rgb_channel_to_pulses(value.r, mut_iter, pulses)?;
         Self::convert_rgb_channel_to_pulses(value.b, mut_iter, pulses)?;
@@ -121,7 +124,8 @@ where
         channel_value: u8,
         mut_iter: &mut IterMut<u32>,
         pulses: (u32, u32),
-    ) -> Result<(), LedAdapterError> {
+    ) -> Result<(), LedAdapterError>
+    {
         for position in [128, 64, 32, 16, 8, 4, 2, 1] {
             *mut_iter.next().ok_or(LedAdapterError::BufferSizeExceeded)? =
                 match channel_value & position {

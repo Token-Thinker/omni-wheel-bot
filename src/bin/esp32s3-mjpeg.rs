@@ -1,6 +1,5 @@
 #![feature(impl_trait_in_assoc_type)]
 #![feature(allocator_api)]
-
 #![no_std]
 #![no_main]
 
@@ -8,41 +7,54 @@
 // https://docs.m5stack.com/en/unit/Unit-CAMS3%205MP
 // https://github.com/m5stack/UnitCamS3-UserDemo/blob/unitcams3-5mp/platforms/unitcam_s3_5mp/components/esp32-camera/sensors/mega_ccm.c
 
-use esp_backtrace as _;
-
 use alloc::vec::Vec;
 use core::cell::RefCell;
+
 use embassy_executor::Spawner;
 use embassy_net::{Stack, StackResources};
 use embassy_time::{Duration, Timer};
 use embedded_io_async::Write;
-use esp_hal::clock::CpuClock;
-use esp_hal::gpio::{Level, Output};
-use esp_hal::i2c::master::{BusTimeout, I2c};
-use esp_hal::lcd_cam::cam::{Camera, RxEightBits};
-use esp_hal::lcd_cam::{cam, LcdCam};
-use esp_hal::peripherals::Peripherals;
-use esp_hal::psram::{
-    psram_raw_parts, FlashFreq, PsramConfig, PsramSize, SpiRamFreq, SpiTimingConfigCoreClock,
+use esp_backtrace as _;
+use esp_hal::{
+    clock::CpuClock,
+    dma_rx_stream_buffer,
+    gpio::{Level, Output},
+    i2c,
+    i2c::master::{BusTimeout, I2c},
+    lcd_cam::{
+        cam,
+        cam::{Camera, RxEightBits},
+        LcdCam,
+    },
+    peripherals::Peripherals,
+    psram::{
+        psram_raw_parts,
+        FlashFreq,
+        PsramConfig,
+        PsramSize,
+        SpiRamFreq,
+        SpiTimingConfigCoreClock,
+    },
+    rng::Rng,
+    time::Rate,
+    timer::timg::TimerGroup,
 };
-use esp_hal::rng::Rng;
-use esp_hal::time::Rate;
-use esp_hal::timer::timg::TimerGroup;
-use esp_hal::{dma_rx_stream_buffer, i2c};
 use esp_hal_embassy::main;
 use esp_println::println;
-use esp_wifi::config::PowerSaveMode;
-use esp_wifi::wifi::{
-    ClientConfiguration, Configuration, WifiController, WifiDevice, WifiEvent, WifiState,
+use esp_wifi::{
+    config::PowerSaveMode,
+    wifi::{ClientConfiguration, Configuration, WifiController, WifiDevice, WifiEvent, WifiState},
+    EspWifiController,
 };
-use esp_wifi::EspWifiController;
 use log::LevelFilter;
 use omni_wheel::utils::camera::{
     mega_ccm::{PixelFormat, Py260, Resolution},
     MyCamera,
 };
-use picoserve::response::chunked::{ChunkWriter, ChunkedResponse, Chunks, ChunksWritten};
-use picoserve::routing::get;
+use picoserve::{
+    response::chunked::{ChunkWriter, ChunkedResponse, Chunks, ChunksWritten},
+    routing::get,
+};
 use static_cell::{ConstStaticCell, StaticCell};
 
 extern crate alloc;
@@ -53,7 +65,8 @@ const PASSWORD: &str = env!("PASSWORD");
 static PSRAM_HEAP: embedded_alloc::LlffHeap = embedded_alloc::LlffHeap::empty();
 
 #[main]
-async fn main(spawner: Spawner) {
+async fn main(spawner: Spawner)
+{
     let peripherals: Peripherals = esp_hal::init(
         esp_hal::Config::default()
             .with_cpu_clock(CpuClock::max())
@@ -163,7 +176,8 @@ async fn run_server(
     stack: Stack<'static>,
     camera: Camera<'static>,
     py260: Py260,
-) {
+)
+{
     let dma_buf = dma_rx_stream_buffer!(64_000, 2000);
 
     let camera = RefCell::new(MyCamera::new(camera, dma_buf));
@@ -191,7 +205,7 @@ async fn run_server(
             ChunkedResponse::new(ImageStream { camera: &camera })
         }),
     );
-    
+
     let mut tx_buf = Vec::new_in(&PSRAM_HEAP);
     tx_buf.resize(10 * 1024, 0);
 
@@ -210,7 +224,8 @@ async fn run_server(
 }
 
 #[embassy_executor::task]
-async fn connection(mut controller: WifiController<'static>) {
+async fn connection(mut controller: WifiController<'static>)
+{
     println!("start connection task");
     println!("Device capabilities: {:?}", controller.capabilities());
 
@@ -248,23 +263,28 @@ async fn connection(mut controller: WifiController<'static>) {
 }
 
 #[embassy_executor::task]
-async fn net_task(mut stack: embassy_net::Runner<'static, WifiDevice<'static>>) {
+async fn net_task(mut stack: embassy_net::Runner<'static, WifiDevice<'static>>)
+{
     stack.run().await
 }
 
-struct ImageStream<'ch> {
+struct ImageStream<'ch>
+{
     camera: &'ch RefCell<MyCamera<'static>>,
 }
 
-impl<'ch> Chunks for ImageStream<'ch> {
-    fn content_type(&self) -> &'static str {
+impl<'ch> Chunks for ImageStream<'ch>
+{
+    fn content_type(&self) -> &'static str
+    {
         "multipart/x-mixed-replace;boundary=123456789000000000000987654321"
     }
 
     async fn write_chunks<W: Write>(
         self,
         mut chunk_writer: ChunkWriter<W>,
-    ) -> Result<ChunksWritten, W::Error> {
+    ) -> Result<ChunksWritten, W::Error>
+    {
         let mut camera = self.camera.borrow_mut();
         let mut transfer = camera.receive();
 
@@ -289,7 +309,7 @@ impl<'ch> Chunks for ImageStream<'ch> {
                         break;
                     }
 
-                    /* TODO: Use interrupt. */
+                    // TODO: Use interrupt.
                     Timer::after_micros(1000).await;
                     continue;
                 }

@@ -1,17 +1,19 @@
 #![allow(dead_code)]
 
-use esp_hal::i2c::master::I2c;
-use esp_hal::{i2c, Blocking};
+use esp_hal::{i2c, i2c::master::I2c, Blocking};
 
-pub struct Py260 {
+pub struct Py260
+{
     i2c: I2c<'static, Blocking>,
     address: u8,
 }
 
-impl Py260 {
+impl Py260
+{
     pub const ADDR: u8 = 0x1F;
 
-    pub fn new(i2c: I2c<'static, Blocking>) -> Self {
+    pub fn new(i2c: I2c<'static, Blocking>) -> Self
+    {
         Self {
             i2c,
             address: Self::ADDR,
@@ -21,7 +23,8 @@ impl Py260 {
     fn read_reg(
         &mut self,
         reg: u16,
-    ) -> Result<u8, i2c::master::Error> {
+    ) -> Result<u8, i2c::master::Error>
+    {
         let mut value = 0;
         self.i2c.write_read(
             self.address,
@@ -35,13 +38,15 @@ impl Py260 {
         &mut self,
         reg: u16,
         value: u8,
-    ) -> Result<(), i2c::master::Error> {
+    ) -> Result<(), i2c::master::Error>
+    {
         let reg_bytes = reg.to_be_bytes();
         self.i2c
             .write(self.address, &[reg_bytes[0], reg_bytes[1], value])
     }
 
-    pub fn reset(&mut self) -> Result<(), i2c::master::Error> {
+    pub fn reset(&mut self) -> Result<(), i2c::master::Error>
+    {
         self.write_reg(CAMERA_RST_REG, 0x00)?;
         self.write_reg(CAMERA_RST_REG, 0x01)?;
         Ok(())
@@ -50,7 +55,8 @@ impl Py260 {
     pub fn set_pixel_format(
         &mut self,
         pixel_format: PixelFormat,
-    ) -> Result<(), i2c::master::Error> {
+    ) -> Result<(), i2c::master::Error>
+    {
         let value = match pixel_format {
             PixelFormat::Jpeg => 0x01,
             PixelFormat::Rgb565 => 0x02,
@@ -62,7 +68,8 @@ impl Py260 {
     pub fn set_resolution(
         &mut self,
         resolution: Resolution,
-    ) -> Result<(), i2c::master::Error> {
+    ) -> Result<(), i2c::master::Error>
+    {
         let value = match resolution {
             Resolution::Qvga => 0x01,
             Resolution::Vga => 0x02,
@@ -80,59 +87,68 @@ impl Py260 {
     pub fn set_quality(
         &mut self,
         quality: u8,
-    ) -> Result<(), i2c::master::Error> {
+    ) -> Result<(), i2c::master::Error>
+    {
         self.write_reg(IMAGE_QUALITY_REG, quality)
     }
 
     pub fn set_hmirror(
         &mut self,
         enable: bool,
-    ) -> Result<(), i2c::master::Error> {
+    ) -> Result<(), i2c::master::Error>
+    {
         self.write_reg(IMAGE_MIRROR_REG, if enable { 0x01 } else { 0x00 })
     }
 
     pub fn set_vflip(
         &mut self,
         enable: bool,
-    ) -> Result<(), i2c::master::Error> {
+    ) -> Result<(), i2c::master::Error>
+    {
         self.write_reg(IMAGE_FLIP_REG, if enable { 0x01 } else { 0x00 })
     }
 
     pub fn set_brightness(
         &mut self,
         brightness: u8,
-    ) -> Result<(), i2c::master::Error> {
+    ) -> Result<(), i2c::master::Error>
+    {
         self.write_reg(BRIGHTNESS_REG, brightness.clamp(0, 8))
     }
 
     pub fn set_contrast(
         &mut self,
         contrast: u8,
-    ) -> Result<(), i2c::master::Error> {
+    ) -> Result<(), i2c::master::Error>
+    {
         self.write_reg(CONTRAST_REG, contrast.clamp(0, 6))
     }
 
     pub fn set_saturation(
         &mut self,
         saturation: u8,
-    ) -> Result<(), i2c::master::Error> {
+    ) -> Result<(), i2c::master::Error>
+    {
         self.write_reg(SATURATION_REG, saturation.clamp(0, 6))
     }
 
-    pub fn read_sensor_id(&mut self) -> Result<u16, i2c::master::Error> {
+    pub fn read_sensor_id(&mut self) -> Result<u16, i2c::master::Error>
+    {
         let h = self.read_reg(SENSOR_ID_HIGH)?;
         let l = self.read_reg(SENSOR_ID_LOW)?;
         Ok(u16::from_be_bytes([h, l]))
     }
 }
 
-pub enum PixelFormat {
+pub enum PixelFormat
+{
     Jpeg,
     Rgb565,
     Yuv422,
 }
 
-pub enum Resolution {
+pub enum Resolution
+{
     /// 320 x 240
     Qvga,
 

@@ -4,9 +4,9 @@ extern crate alloc;
 
 // Standard imports
 use core::cell::RefCell;
-use heapless::String;
+
 // Embassy framework imports
-use embassy_executor::Spawner;
+use embassy_executor::{task, Spawner};
 use embassy_net::{Runner, Stack, StackResources};
 use embassy_time::{Duration, Timer};
 // ESP-specific imports
@@ -23,12 +23,15 @@ use esp_hal::{
 };
 use esp_wifi::{
     init,
-    wifi::{ClientConfiguration, Configuration, WifiController, WifiDevice, WifiEvent, WifiState},
+    wifi::{WifiController, WifiDevice},
     EspWifiController,
 };
+use heapless::String;
 use log::LevelFilter;
-//Internal Modules
+// Internal Modules
+use omni_wheel::utils::SystemController;
 use omni_wheel::{
+    mk_static,
     smart_led_buffer,
     utils::{
         connection::app_server,
@@ -37,29 +40,22 @@ use omni_wheel::{
     },
 };
 
-// Static memory allocation macro
-macro_rules! mk_static {
-    ($t:ty, $val:expr) => {{
-        static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
-        let x = STATIC_CELL.uninit().write(($val));
-        x
-    }};
-}
-
 // Constants for Wi-Fi credentials
 const SSID: &str = env!("SSID");
 const PASSWORD: &str = env!("PASSWORD");
 const BUF_SIZE: usize = 2 * 24 + 1;
 
+
+type Bus    = I2c<'static, Blocking>;
+type LEDDrv = SmartLedsAdapter<Channel<Blocking, 0>, { BUF_SIZE }>;
+
 // Static memory for I2C devices
-static I2C_REF: static_cell::StaticCell<RefCell<I2c<'static, Blocking>>> =
-    static_cell::StaticCell::new();
-static DEVICES: static_cell::StaticCell<Option<I2CDevices<'static, I2c<'static, Blocking>>>> =
+static I2C_BUS: static_cell::StaticCell<RefCell<I2c<'static, Blocking>>> =
     static_cell::StaticCell::new();
 
 #[esp_hal_embassy::main]
-async fn main(spawner: Spawner) -> ! {
-    // General Configuration Block *****************************************************************
+async fn main(spawner: Spawner) -> !
+{
     esp_println::logger::init_logger(LevelFilter::Trace);
     tracing::info!("Logger initialized");
 
@@ -69,36 +65,16 @@ async fn main(spawner: Spawner) -> ! {
     esp_alloc::heap_allocator!(size: 72 * 1024);
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
-
     let mut rng = Rng::new(peripherals.RNG);
-    // End of General Configuration Block **********************************************************
-
-    //Peripherals Configuration ********************************************************************
     let sda_per = peripherals.GPIO21;
-    let scl_per = peripherals.GPIO22;
-
-    let i2c = I2c::new(peripherals.I2C0, Config::default())
-        .unwrap()
-        .with_sda(sda_per)
-        .with_scl(scl_per);
-    let i2c_ref = I2C_REF.init(RefCell::new(i2c));
-
-    let devices_init = I2CDevices::new(i2c_ref, 0.148, 0.195)
-        .map(|mut dev| {
-            if let Err(e) = dev.configure_pwm() {
-                tracing::warn!("Additional PWM configuration failed: {:?}", e);
-            }
-            dev.init_imu_data();
-            dev
-        })
-        .or_else(|e| {
-            tracing::warn!("Skipping I2C/IMU usage: {:?}", e);
-            I2CDevices::scan(&i2c_ref);
-            Err(e)
-        })
-        .ok();
-
-    let devices = DEVICES.init(devices_init);
+    let scl_per = peripherals.GPIO2;
+    
+   let i2c_bus= I2C_BUS.init(RefCell::new(
+        I2c::new(peripherals.I2C0, Config::default())
+            .unwrap()
+            .with_sda(sda_per)
+            .with_scl(scl_per)
+    ));
 
     cfg_if::cfg_if! {
         if #[cfg(feature = "esp32h2")] {
@@ -110,10 +86,12 @@ async fn main(spawner: Spawner) -> ! {
 
     let rmt = Rmt::new(peripherals.RMT, freq).unwrap();
     let rmt_buffer = smart_led_buffer!(2);
-    let adapter = SmartLedsAdapter::new(rmt.channel0, peripherals.GPIO12, rmt_buffer);
-    let leds = LedModule::new(adapter);
+    let led_drv = SmartLedsAdapter::new(rmt.channel0, peripherals.GPIO12, rmt_buffer);
+    let sys_ctrl = SystemController::new(i2c_bus, None, None);
 
-    // Wi-Fi Configuration Block *******************************************************************
+
+    // Wi-Fi Configuration Block
+    // *******************************************************************
     let esp_wifi_ctrl = &*mk_static!(
         EspWifiController<'static>,
         init(timg0.timer0, rng.clone(), peripherals.RADIO_CLK).unwrap()
@@ -142,7 +120,6 @@ async fn main(spawner: Spawner) -> ! {
     }
 
     let sta_config = embassy_net::Config::dhcpv4(dhcpv_config);
-
     let seed = (rng.random() as u64) << 32 | rng.random() as u64;
 
     // Init network stack
@@ -152,23 +129,43 @@ async fn main(spawner: Spawner) -> ! {
         mk_static!(StackResources<3>, StackResources::<3>::new()),
         seed,
     );
-    // End of Wi-Fi Configuration Block ************************************************************
+    // End of Wi-Fi Configuration Block
+    // ************************************************************
 
+    spawner.spawn(i2c_task(sys_ctrl)).ok();
+    spawner.spawn(led_task(led_drv)).ok();
     spawner.spawn(connection(controller)).ok();
     spawner.spawn(net_task(sta_runner)).ok();
 
     wait_for_network(&sta_stack).await;
 
-    spawner.spawn(handle_i2c_message(devices)).unwrap();
-    spawner.spawn(handle_leds_message(leds)).unwrap();
-
     app_server(0, 80, sta_stack, None).await;
 }
 
+#[task]
+async fn i2c_task(mut ctrl: SystemController<Bus>) -> !
+{
+    SystemController::i2c_ch(&mut ctrl).await
+}
+#[task]
+async fn led_task(led_drv: SmartLedsAdapter<Channel<Blocking, 0>, { BUF_SIZE }>) -> !
+{
+    tracing::info!("LED task started");
+    loop {
+        
+    }
+    //SystemController::led_ch(led_drv).await
+}
+
 /// Task to manage Wi-Fi connections
-#[embassy_executor::task]
-async fn connection(mut controller: WifiController<'static>) {
-    tracing::info!("Start connection task");
+#[task]
+async fn connection(mut controller: WifiController<'static>)
+{
+    use core::convert::TryInto;
+
+    use embassy_time::{Duration, Timer};
+    use esp_wifi::wifi::{ClientConfiguration, Configuration, WifiEvent, WifiState};
+
     tracing::info!("Device capabilities: {:?}", controller.capabilities());
     loop {
         match esp_wifi::wifi::wifi_state() {
@@ -187,7 +184,7 @@ async fn connection(mut controller: WifiController<'static>) {
             });
             controller.set_configuration(&client_config).unwrap();
             controller.start_async().await.unwrap();
-            tracing::info!("Wi-Fi started!");
+            tracing::info!("Connecting to SSID: {}", SSID);
         }
 
         match controller.connect_async().await {
@@ -201,58 +198,12 @@ async fn connection(mut controller: WifiController<'static>) {
 }
 
 /// Task to manage the network stack
-#[embassy_executor::task]
-async fn net_task(mut runner: Runner<'static, WifiDevice<'static>>) {
-    runner.run().await;
-}
-
-/// Task to handle I2C messages
-#[embassy_executor::task]
-pub async fn handle_i2c_message(
-    devices: &'static mut Option<I2CDevices<'static, I2c<'static, Blocking>>>
-) -> ! {
-    loop {
-        let cmd = I2C_CHANNEL.receiver().receive().await;
-        tracing::info!("Received I2CCommand: {:?}", cmd);
-
-        if let Some(devices) = devices.as_mut() {
-            // If we have a valid I2CDevices, execute the command
-            match devices.execute_command(cmd) {
-                Ok(Some((accel, gyro, temp))) => {
-                    tracing::info!(?accel, ?gyro, ?temp, "IMU Data Read");
-                }
-                Ok(None) => {
-                    tracing::info!("I2C command executed successfully");
-                }
-                Err(err) => {
-                    tracing::error!(?err, "Failed to execute I2C command");
-                }
-            }
-        } else {
-            // If I2CDevices is None, just warn or ignore
-            tracing::warn!("I2C command received but devices not initialized: {cmd:?}");
-        }
-    }
-}
-
-/// Task to handle LEDs messages
-#[embassy_executor::task]
-pub async fn handle_leds_message(
-    mut leds: LedModule<SmartLedsAdapter<Channel<Blocking, 0>, { BUF_SIZE }>>
-) -> ! {
-    loop {
-        let cmd = LED_CHANNEL.receiver().receive().await;
-        tracing::info!("Received LEDCommand: {:?}", cmd);
-
-        match leds.ex_command(cmd) {
-            Ok(()) => tracing::info!("Command executed successfully"),
-            Err(err) => tracing::error!(?err, "Failed to execute LEDs command"),
-        }
-    }
-}
+#[task]
+async fn net_task(mut runner: Runner<'static, WifiDevice<'static>>) { runner.run().await; }
 
 /// Helper function to wait for network connection
-async fn wait_for_network(stack: &Stack<'static>) {
+async fn wait_for_network(stack: &Stack<'static>)
+{
     loop {
         if stack.is_link_up() {
             break;

@@ -7,10 +7,6 @@
 
 extern crate alloc;
 
-use crate::utils::{
-    controllers::{SystemCommand, I2C_CHANNEL, LED_CHANNEL},
-    frontend::{CSS, HTML, JAVA},
-};
 use alloc::{string::String, vec::Vec};
 
 use embassy_net::Stack;
@@ -23,20 +19,25 @@ use picoserve::{
     extract::FromRequest,
     io::embedded_io_async as embedded_aio,
     request::{RequestBody, RequestParts},
-    response::ws::{
-        Message, ReadMessageError, SocketRx, SocketTx, WebSocketCallback, WebSocketUpgrade,
+    response::{
+        ws::{Message, ReadMessageError, SocketRx, SocketTx, WebSocketCallback, WebSocketUpgrade},
+        StatusCode,
     },
-    response::StatusCode,
     url_encoded::deserialize_form,
     Router,
 };
-
 use serde::Deserialize;
+
+use crate::utils::{
+    controllers::{SystemCommand, I2C_CHANNEL, LED_CHANNEL},
+    frontend::{CSS, HTML, JAVA},
+};
 
 pub struct ServerTimer;
 pub struct WebSocket;
 #[derive(Clone, Debug)]
-pub struct SessionState {
+pub struct SessionState
+{
     pub last_seen: u64,
 }
 pub struct SessionManager;
@@ -48,7 +49,8 @@ lazy_static! {
 
 /// Manages timeouts for the WebSocket server.
 #[allow(unused_qualifications)]
-impl picoserve::Timer for ServerTimer {
+impl picoserve::Timer for ServerTimer
+{
     type Duration = embassy_time::Duration;
     type TimeoutError = embassy_time::TimeoutError;
 
@@ -57,13 +59,15 @@ impl picoserve::Timer for ServerTimer {
         &mut self,
         duration: Self::Duration,
         future: F,
-    ) -> Result<F::Output, Self::TimeoutError> {
+    ) -> Result<F::Output, Self::TimeoutError>
+    {
         embassy_time::with_timeout(duration, future).await
     }
 }
 
 /// Handles incoming WebSocket connections.
-impl WebSocketCallback for WebSocket {
+impl WebSocketCallback for WebSocket
+{
     async fn run<Reader, Writer>(
         self,
         mut rx: SocketRx<Reader>,
@@ -135,12 +139,14 @@ impl WebSocketCallback for WebSocket {
 }
 
 #[allow(dead_code)]
-impl SessionManager {
+impl SessionManager
+{
     /// Creates a new session with the given session ID and timestamp.
     pub async fn create_session(
         session_id: String,
         timestamp: u64,
-    ) {
+    )
+    {
         SESSION_STORE.lock().await.insert(
             session_id,
             SessionState {
@@ -151,7 +157,8 @@ impl SessionManager {
 
     /// Retrieves a copy of the session state for the given session ID.
     /// Returns None if the session does not exist.
-    pub async fn get_session(session_id: &str) -> Option<SessionState> {
+    pub async fn get_session(session_id: &str) -> Option<SessionState>
+    {
         SESSION_STORE.lock().await.get(session_id).cloned()
     }
 
@@ -160,24 +167,29 @@ impl SessionManager {
     pub async fn update_session(
         session_id: &str,
         timestamp: u64,
-    ) -> bool {
+    ) -> bool
+    {
         if let Some(session) = SESSION_STORE.lock().await.get_mut(session_id) {
             session.last_seen = timestamp;
             true
-        } else {
+        }
+        else {
             false
         }
     }
 
     /// Removes the session identified by session_id.
     /// Returns true if a session was removed.
-    pub async fn remove_session(session_id: &str) -> bool {
+    pub async fn remove_session(session_id: &str) -> bool
+    {
         SESSION_STORE.lock().await.remove(session_id).is_some()
     }
 
     /// Purges sessions that have not been updated since the provided threshold.
-    /// For example, pass in a timestamp and any session with last_seen less than that value will be removed.
-    pub async fn purge_stale_sessions(threshold: u64) {
+    /// For example, pass in a timestamp and any session with last_seen less
+    /// than that value will be removed.
+    pub async fn purge_stale_sessions(threshold: u64)
+    {
         // Retain sessions that have a last_seen timestamp >= threshold.
         SESSION_STORE
             .lock()
@@ -186,7 +198,8 @@ impl SessionManager {
     }
 
     /// Returns a list of active session IDs.
-    pub async fn list_sessions() -> Vec<String> {
+    pub async fn list_sessions() -> Vec<String>
+    {
         SESSION_STORE.lock().await.keys().cloned().collect()
     }
 }
@@ -197,7 +210,8 @@ pub async fn run(
     port: u16,
     stack: Stack<'static>,
     config: Option<&'static picoserve::Config<Duration>>,
-) -> ! {
+) -> !
+{
     let default_config = picoserve::Config::new(picoserve::Timeouts {
         start_read_request: Some(Duration::from_secs(5)),
         persistent_start_read_request: None,
@@ -271,7 +285,8 @@ pub async fn run(
     // Print out the IP and port before starting the server.
     if let Some(ip_cfg) = stack.config_v4() {
         tracing::info!("Starting server at {}:{}", ip_cfg.address, port);
-    } else {
+    }
+    else {
         tracing::warn!(
             "Starting WebSocket server on port {port}, but no IPv4 address is assigned yet!"
         );
@@ -294,23 +309,27 @@ pub async fn run(
 }
 
 #[derive(Debug, Deserialize)]
-pub struct QueryParams {
+pub struct QueryParams
+{
     session: String,
 }
 
-pub struct WsConnectionParams {
+pub struct WsConnectionParams
+{
     pub upgrade: WebSocketUpgrade,
     pub query: QueryParams,
 }
 
-impl<'r, S> FromRequest<'r, S> for WsConnectionParams {
+impl<'r, S> FromRequest<'r, S> for WsConnectionParams
+{
     type Rejection = &'static str; // Or a custom error type
 
     async fn from_request<R: Read>(
         state: &'r S,
         parts: RequestParts<'r>,
         body: RequestBody<'r, R>,
-    ) -> Result<Self, Self::Rejection> {
+    ) -> Result<Self, Self::Rejection>
+    {
         // First extract the WebSocketUpgrade as usual.
         let upgrade = WebSocketUpgrade::from_request(state, parts.clone(), body)
             .await
