@@ -54,6 +54,7 @@ impl picoserve::Timer for ServerTimer
     type Duration = embassy_time::Duration;
     type TimeoutError = embassy_time::TimeoutError;
 
+    //noinspection ALL
     /// Runs a future with a timeout.
     async fn run_with_timeout<F: core::future::Future>(
         &mut self,
@@ -68,6 +69,20 @@ impl picoserve::Timer for ServerTimer
 /// Handles incoming WebSocket connections.
 impl WebSocketCallback for WebSocket
 {
+    //noinspection ALL
+    //noinspection ALL
+    //noinspection ALL
+    //noinspection ALL
+    //noinspection ALL
+    //noinspection ALL
+    //noinspection ALL
+    //noinspection ALL
+    //noinspection ALL
+    //noinspection ALL
+    //noinspection ALL
+    //noinspection ALL
+    //noinspection ALL
+    //noinspection ALL
     async fn run<Reader, Writer>(
         self,
         mut rx: SocketRx<Reader>,
@@ -162,6 +177,8 @@ impl SessionManager
         SESSION_STORE.lock().await.get(session_id).cloned()
     }
 
+    //noinspection ALL
+    //noinspection ALL
     /// Updates the last seen timestamp of the session identified by session_id.
     /// Returns true if the session was found and updated.
     pub async fn update_session(
@@ -185,6 +202,8 @@ impl SessionManager
         SESSION_STORE.lock().await.remove(session_id).is_some()
     }
 
+    //noinspection ALL
+    //noinspection ALL
     /// Purges sessions that have not been updated since the provided threshold.
     /// For example, pass in a timestamp and any session with last_seen less
     /// than that value will be removed.
@@ -204,6 +223,11 @@ impl SessionManager
     }
 }
 
+//noinspection ALL
+//noinspection ALL
+//noinspection ALL
+//noinspection ALL
+//noinspection ALL
 /// Creates WS Server
 pub async fn run(
     id: usize,

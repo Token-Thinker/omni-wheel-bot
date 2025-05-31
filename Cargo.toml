@@ -2,6 +2,7 @@
 name = "omni-wheel"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.85.0"
 license = "MIT OR Apache-2.0"
 
 resolver = "2"
@@ -27,7 +28,6 @@ embedded-io-async = { version = "0.6" }
 embassy-executor = { version = "0.7.0", features = ["task-arena-size-20480"] }
 embassy-net = { version = "0.7.0", features = ["proto-ipv4", "tcp", "udp", "dhcpv4", "dhcpv4-hostname"] }
 embassy-sync = { version = "0.6" }
-embassy-futures = {version = "0.1.1"}
 embassy-time = { version = "0.4.0" }
 esp-alloc = { version = "0.7.0" }
 esp-backtrace = { version = "0.15.0", features = ["exception-handler", "println", "panic-handler"] }
@@ -51,8 +51,6 @@ tracing = { version = "0.1", default-features = false, features = ["log", "attri
 
 
 [profile.dev]
-# Rust debug is too slow.
-# For debug builds always builds with some optimization
 opt-level = "s"
 
 [profile.release]

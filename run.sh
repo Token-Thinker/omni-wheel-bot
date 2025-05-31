@@ -5,9 +5,7 @@ set -euo pipefail
 RED='\033[0;31m' GREEN='\033[0;32m' YELLOW='\033[0;33m'
 BLUE='\033[0;34m' BOLD='\033[1m' RESET='\033[0m'
 
-#
-# 1) Parse args up front
-#
+
 BUILD=true
 FLASH=true
 MONITOR=false
@@ -56,17 +54,17 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
-#
-# 2) If we're building, ensure sudo
-#
+RUST_VERSION=$(
+  sed -n 's/^rust-version *= *"\([^"]\+\)".*/\1/p' Cargo.toml
+)
+
+
 if $BUILD && [[ $EUID -ne 0 ]]; then
     echo -e "${YELLOW}⚙️  Building requires admin privileges.${RESET}"
     exec sudo -p 'Enter your password to build: ' bash "$0" "$@"
 fi
 
-#
-# 3) Ensure root sees your cargo bin
-#
+
 if [[ -n "${SUDO_USER-}" ]]; then
     USER_HOME=$(eval echo "~$SUDO_USER")
     export PATH="$USER_HOME/.cargo/bin:$PATH"
@@ -74,9 +72,7 @@ else
     export PATH="$HOME/.cargo/bin:$PATH"
 fi
 
-#
-# 4) Wi-Fi creds only for builds
-#
+
 if $BUILD; then
     echo -e "${BLUE}${BOLD}▶ Why we ask for your Wi-Fi password${RESET}"
     echo -e "  • Injected only into this script’s environment"
@@ -123,13 +119,11 @@ if $BUILD; then
     echo
 fi
 
-#
-# 5) Board & bin selection (if build or flash)
-#
+
 if $BUILD || $FLASH; then
     echo -e "${BLUE}${BOLD}▶ Select target board:${RESET}"
     BOARD_OPTIONS=(esp32 esp32s3)
-    PS3="$(echo -e ${YELLOW}Choice [1-${#BOARD_OPTIONS[@]}]:${RESET} )"
+    PS3="$(echo -e "${YELLOW}"Choice [1-${#BOARD_OPTIONS[@]}]:"${RESET}" )"
     select BOARD in "${BOARD_OPTIONS[@]}"; do
         [[ -n "$BOARD" ]] && break
         echo -e "${RED}Invalid selection.${RESET} Try again."
@@ -153,8 +147,8 @@ if $BUILD || $FLASH; then
     echo
 
     echo -e "${BLUE}${BOLD}▶ Select firmware binary:${RESET}"
-    mapfile -t BIN_OPTIONS < <(cd src/bin && ls *.rs | sed 's/\.rs$//')
-    PS3="$(echo -e ${YELLOW}Choice [1-${#BIN_OPTIONS[@]}]:${RESET} )"
+    mapfile -t BIN_OPTIONS < <(cd src/bin && find -- *.rs | sed 's/\.rs$//')
+    PS3="$(echo -e "${YELLOW}"Choice [1-${#BIN_OPTIONS[@]}]:"${RESET}" )"
     select BIN in "${BIN_OPTIONS[@]}"; do
         [[ -n "$BIN" ]] && break
         echo -e "${RED}Invalid selection.${RESET} Try again."
@@ -162,9 +156,7 @@ if $BUILD || $FLASH; then
     echo
 fi
 
-#
-# 6) Serial-port detector (host side)
-#
+
 detect_serial_port() {
     local OS candidates ports idx
     OS=$(uname)
@@ -186,37 +178,37 @@ detect_serial_port() {
         for i in "${!ports[@]}"; do
             printf "  [%d] %s\n" "$i" "${ports[$i]}"
         done
-        read -p "$(echo -e ${YELLOW}"Select port #:${RESET} ")" idx
+        read -r -p "$(echo -e "${YELLOW}""Select port #:${RESET} ")" idx
         echo "${ports[$idx]}"
     else
         return 1
     fi
 }
 
-#
-# 7) Build only (in-container)
-#
+
 if $BUILD; then
     echo -e "${GREEN}${BOLD}=== BUILD PHASE (${BOARD}/${BIN}) ===${RESET}"
-    docker pull espressif/idf-rust:all_latest
-    docker run -it \
-        -v "$(pwd)":/workspace \
-        -e SSID="$SSID" \
-        -e PASSWORD="$PASSWORD" \
-        -e LIBCLANG_PATH="/home/esp/.rustup/toolchains/esp/xtensa-esp32-elf-clang/esp-18.1.2_20240912/esp-clang/lib" \
-        -e PATH="/home/esp/.rustup/toolchains/esp/xtensa-esp-elf/esp-14.2.0_20240906/xtensa-esp-elf/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/esp/.cargo/bin" \
-        --rm \
-        --workdir=/workspace \
-        --entrypoint=rustup \
-        docker.io/espressif/idf-rust:esp32_1.84.0.0 \
-        run esp cargo "$BOARD" --bin "$BIN"
+
+    docker run --rm \
+      -v "$(pwd)":/workspace \
+      -e SSID="$SSID" \
+      -e PASSWORD="$PASSWORD" \
+      -e LIBCLANG_PATH="/home/esp/.rustup/toolchains/esp/xtensa-esp32-elf-clang/esp-19.1.2_20250225/esp-clang/lib" \
+      -e PATH="/home/esp/.rustup/toolchains/esp/xtensa-esp-elf/esp-14.2.0_20240906/xtensa-esp-elf/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/esp/.cargo/bin" \
+      --entrypoint sh \
+      espressif/idf-rust:esp32_"${RUST_VERSION}".0 \
+      -c "\
+        rustc --version --verbose && \
+        rustup show active-toolchain && \
+        cd /workspace && \
+        rustup run esp cargo \"$BOARD\" --bin \"$BIN\" -q --color=always\
+      "
+
     echo -e "${GREEN}${BOLD}=== BUILD COMPLETE ===${RESET}"
     echo
 fi
 
-#
-# 8) Flash on host (after build)
-#
+
 if $FLASH; then
     echo -e "${GREEN}${BOLD}=== FLASH PHASE (host) ===${RESET}"
     if ! command -v espflash &>/dev/null; then
@@ -225,7 +217,7 @@ if $FLASH; then
     fi
 
     PORT=$(detect_serial_port) || {
-      read -p "$(echo -e ${YELLOW}"Serial port (e.g. /dev/ttyUSB0):${RESET} ")" PORT
+      read -p "$(echo -e "${YELLOW}""Serial port (e.g. /dev/ttyUSB0):${RESET} ")" PORT
       [[ -n "$PORT" ]] || { echo "No port, abort."; exit 1; }
     }
 
@@ -240,9 +232,7 @@ if $FLASH; then
     echo
 fi
 
-#
-# 9) Monitor only
-#
+
 if $MONITOR; then
     echo -e "${GREEN}${BOLD}=== MONITOR ===${RESET}"
     if ! command -v screen &>/dev/null; then
@@ -251,7 +241,7 @@ if $MONITOR; then
     fi
 
     PORT=$(detect_serial_port) || {
-        read -p "$(echo -e ${YELLOW}Serial port:${RESET} )" PORT
+        read -p "$(echo -e "${YELLOW}"Serial port:"${RESET}" )" PORT
         [[ -n "$PORT" ]] || exit 1
     }
 

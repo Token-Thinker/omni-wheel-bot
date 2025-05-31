@@ -9,16 +9,13 @@
 
 /// Module for managing I2C-connected devices.
 pub(crate) mod i2c;
-
 mod driver;
 /// Module for handling wheel kinematics calculations.
 pub(crate) mod kinematics;
 pub(crate) mod leds;
-pub(crate) mod pid;
 
 use core::cell::RefCell;
 
-use embassy_futures::select::{select, Either};
 use esp_hal::Blocking;
 use esp_hal::rmt::Channel;
 // Re-export for easier access
@@ -26,7 +23,6 @@ pub use i2c::*;
 pub(crate) use kinematics::*;
 pub use leds::*;
 use serde::{Deserialize, Serialize};
-use smart_leds_trait::{SmartLedsWrite, RGB8};
 use crate::utils::smart_leds::SmartLedsAdapter;
 
 //I fucking hate types and stupid adapters and shit that i have to get rid of later -.-
@@ -50,6 +46,12 @@ impl<I2C> SystemController<I2C>
 where
     I2C: embedded_hal::i2c::I2c + 'static,
 {
+    //noinspection ALL
+    //noinspection ALL
+    //noinspection ALL
+    //noinspection ALL
+    //noinspection ALL
+    //noinspection ALL
     pub fn new(
         i2c_bus: &'static RefCell<I2C>,
         wheel_radius: Option<f32>,
@@ -80,6 +82,10 @@ where
         }
     }
 
+    //noinspection ALL
+    //noinspection ALL
+    //noinspection ALL
+    //noinspection ALL
     pub async fn i2c_ch(&mut self) -> !
     {
         loop {
@@ -103,6 +109,8 @@ where
         }
     }
 
+    //noinspection ALL
+    //noinspection ALL
     // todo: implement LED control (generic)
     pub async fn led_ch(self, adapter: Fuckleds ) -> !
     {
