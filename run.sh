@@ -59,10 +59,6 @@ RUST_VERSION=$(
 )
 
 
-if $BUILD && [[ $EUID -ne 0 ]]; then
-    echo -e "${YELLOW}⚙️  Building requires admin privileges.${RESET}"
-    exec sudo -p 'Enter your password to build: ' bash "$0" "$@"
-fi
 
 
 if [[ -n "${SUDO_USER-}" ]]; then
@@ -79,20 +75,13 @@ if $BUILD; then
     echo -e "  • Never written to disk or git"
     echo
 
-    read -p "$(echo -e ${YELLOW}Enter Wi-Fi SSID:${RESET} )" SSID
-    read -s -p "$(echo -e ${YELLOW}Enter Wi-Fi Password:${RESET} )" PASSWORD
-    echo
+    # Read Wi-Fi credentials from environment or prompt if missing
+    if [ -z "${SSID-}" ] || [ -z "${PASSWORD-}" ]; then
+        read -p "$(echo -e ${YELLOW}Enter Wi-Fi SSID:${RESET} )" SSID
+        read -s -p "$(echo -e ${YELLOW}Enter Wi-Fi Password:${RESET} )" PASSWORD
+        echo
+    fi
     export SSID PASSWORD
-
-    # Validate non-empty
-    if [[ -z "$SSID" ]]; then
-        echo -e "${RED}Error:${RESET} SSID cannot be empty."
-        exit 1
-    fi
-    if [[ -z "$PASSWORD" ]]; then
-        echo -e "${RED}Error:${RESET} Password cannot be empty."
-        exit 1
-    fi
 
     # Debug confirmation
     if $DEBUG; then

@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 use core::f32::consts::PI;
 use libm;
 
