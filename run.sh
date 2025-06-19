@@ -136,7 +136,7 @@ if $BUILD || $FLASH; then
     echo
 
     echo -e "${BLUE}${BOLD}▶ Select firmware binary:${RESET}"
-    mapfile -t BIN_OPTIONS < <(cd src/bin && find -- *.rs | sed 's/\.rs$//')
+    mapfile -t BIN_OPTIONS < <(cd src/mcu && find -- *.rs | sed 's/\.rs$//')
     PS3="$(echo -e "${YELLOW}"Choice [1-${#BIN_OPTIONS[@]}]:"${RESET}" )"
     select BIN in "${BIN_OPTIONS[@]}"; do
         [[ -n "$BIN" ]] && break
