@@ -1,0 +1,28 @@
+[package]
+name = "omni-wheel"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85.0"
+license = "MIT OR Apache-2.0"
+
+[build-dependencies]
+cfg-if = "1.0.0"
+
+[dependencies]
+cfg-if = "1.0.0"
+embedded-alloc = { version = "0.6.0", features = ["allocator_api"] }
+embedded-hal = { version = "1.0" }
+embedded-hal-bus = { version = "0.3.0", features = ["async"] }
+embedded-io-async = { version = "0.6" }
+hashbrown = { version = "0.15.2" }
+heapless = "0.8.0"
+icm42670 = { version = "0.2.0" }
+lazy_static = { version = "1.5.0", features = ["spin_no_std"] }
+libm = { version = "0.2.11" }
+log = { version = "0.4" }
+pwm-pca9685 = { version = "1.0.0" }
+serde = { version = "1", default-features = false, features = ["derive"] }
+serde_json = { version = "1", features = ["alloc"], default-features = false }
+smart-leds-trait = { version = "0.3.0" }
+static_cell = { version = "2.0", features = ["nightly"] }
+tracing = { version = "0.1", default-features = false, features = ["log","attributes"] }
