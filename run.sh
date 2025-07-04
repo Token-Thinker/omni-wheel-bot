@@ -54,9 +54,7 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
-RUST_VERSION=$(
-  sed -n 's/^rust-version *= *"\([^"]\+\)".*/\1/p' Cargo.toml
-)
+RUST_VERSION=$(sed -n 's/^rust-version *= *"\([^"]\+\)".*/\1/p' core/Cargo.toml)
 
 
 
@@ -110,6 +108,15 @@ fi
 
 
 if $BUILD || $FLASH; then
+    echo -e "${BLUE}${BOLD}▶ Select chip maker:${RESET}"
+    mapfile -t MAKER_OPTIONS < <(find bin -maxdepth 1 -mindepth 1 -type d | sed 's|.*/||')
+    PS3="$(echo -e "${YELLOW}Choice [1-${#MAKER_OPTIONS[@]}]:${RESET} ")"
+    select MAKER in "${MAKER_OPTIONS[@]}"; do
+        [[ -n "$MAKER" ]] && break
+        echo -e "${RED}Invalid selection.${RESET} Try again."
+    done
+    echo
+
     echo -e "${BLUE}${BOLD}▶ Select target board:${RESET}"
     BOARD_OPTIONS=(esp32 esp32s3)
     PS3="$(echo -e "${YELLOW}"Choice [1-${#BOARD_OPTIONS[@]}]:"${RESET}" )"
@@ -136,7 +143,7 @@ if $BUILD || $FLASH; then
     echo
 
     echo -e "${BLUE}${BOLD}▶ Select firmware binary:${RESET}"
-    mapfile -t BIN_OPTIONS < <(cd src/mcu && find -- *.rs | sed 's/\.rs$//')
+    mapfile -t BIN_OPTIONS < <(cd "bin/${MAKER}/src/features" && find . -maxdepth 1 -type f -name "*.rs" | sed 's|^\./||;s|\.rs$||')
     PS3="$(echo -e "${YELLOW}"Choice [1-${#BIN_OPTIONS[@]}]:"${RESET}" )"
     select BIN in "${BIN_OPTIONS[@]}"; do
         [[ -n "$BIN" ]] && break
@@ -189,8 +196,8 @@ if $BUILD; then
       -c "\
         rustc --version --verbose && \
         rustup show active-toolchain && \
-        cd /workspace && \
-        rustup run esp cargo \"$BOARD\" --bin \"$BIN\" -q --color=always\
+        cd /workspace/bin/"$MAKER" && \
+        rustup run esp cargo "$BOARD" --bin "$BIN" -q --color=always\
       "
 
     echo -e "${GREEN}${BOLD}=== BUILD COMPLETE ===${RESET}"
