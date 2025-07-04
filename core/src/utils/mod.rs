@@ -8,8 +8,6 @@
 //! - `frontend`: Handles user interface and user input
 //! - `packages`: Handles communication packages and their management.
 
-/// Module for managing camera.
-pub mod camera;
 /// Module for managing network connections and communication protocols.
 pub mod connection;
 /// Module for handling hardware controllers, such as motors and sensors.

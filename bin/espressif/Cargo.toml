@@ -24,10 +24,13 @@ omni-wheel = { path = "../../core" }
 
 # Board-specific and embedded dependencies
 cfg-if = "1.0.0"
+embassy-executor = "0.7.0"
+embassy-net = { version = "0.7.0",features = ["dhcpv4"] }
+
 esp-alloc = { version = "0.7.0" }
 esp-backtrace = { version = "0.15.0", features = ["exception-handler", "println", "panic-handler"] }
 esp-hal = { version = "1.0.0-beta.0", features = ["unstable", "psram"] }
-esp-hal-embassy = { version = "0.7.0" }
+esp-hal-embassy = { version = "0.7.0"}
 esp-println = { version = "0.13.0", features = ["log"] }
 esp-wifi = { version = "0.13.0", features = ["wifi"] }
 hashbrown = { version = "0.15.2" }
@@ -36,7 +39,7 @@ icm42670 = { version = "0.2.0" }
 lazy_static = { version = "1.5.0", features = ["spin_no_std"] }
 libm = { version = "0.2.11" }
 log = { version = "0.4" }
-picoserve = { version = "0.16.0", features = ["embassy"] }
+
 pwm-pca9685 = { version = "1.0.0" }
 serde = { version = "1", default-features = false, features = ["derive"] }
 serde_json = { version = "1", features = ["alloc"], default-features = false }

@@ -1,6 +1,5 @@
 /// Abstract motor‐/sensor‐driver interface.
-pub trait WheelDriver
-{
+pub trait WheelDriver {
     type Error;
 
     /// Read the current wheel speeds (rad/s).

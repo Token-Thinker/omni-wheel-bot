@@ -14,12 +14,20 @@ embedded-alloc = { version = "0.6.0", features = ["allocator_api"] }
 embedded-hal = { version = "1.0" }
 embedded-hal-bus = { version = "0.3.0", features = ["async"] }
 embedded-io-async = { version = "0.6" }
+embassy-net = {version = "0.7.0"}
+embassy-sync = {version =  "0.7.0" }
+embassy-time = {version = "0.4.0"}
+embassy-executor = {version = "0.7.0"}
+
+esp-hal = "1.0.0-beta.0"
+
 hashbrown = { version = "0.15.2" }
 heapless = "0.8.0"
 icm42670 = { version = "0.2.0" }
 lazy_static = { version = "1.5.0", features = ["spin_no_std"] }
 libm = { version = "0.2.11" }
 log = { version = "0.4" }
+picoserve = { version = "0.16.0", features = ["embassy"] }
 pwm-pca9685 = { version = "1.0.0" }
 serde = { version = "1", default-features = false, features = ["derive"] }
 serde_json = { version = "1", features = ["alloc"], default-features = false }

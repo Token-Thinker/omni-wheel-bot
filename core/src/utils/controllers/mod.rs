@@ -7,9 +7,9 @@
 //! - `wheel_kinematics`: Manages wheel kinematics calculations for omni-wheel
 //!   robots.
 
+mod driver;
 /// Module for managing I2C-connected devices.
 pub(crate) mod i2c;
-mod driver;
 /// Module for handling wheel kinematics calculations.
 pub(crate) mod kinematics;
 pub(crate) mod leds;
@@ -31,14 +31,12 @@ type Fuckleds = SmartLedsAdapter<Channel<Blocking, 0>, { BUF_SIZE }>;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "ct", rename_all = "snake_case")] // ct = command type
-pub enum SystemCommand
-{
+pub enum SystemCommand {
     I(I2CCommand),
     L(LEDCommand),
 }
 
-pub struct SystemController<I2C: 'static>
-{
+pub struct SystemController<I2C: 'static> {
     pub sensors: Option<I2CDevices<'static, I2C>>,
     pub robot_dimensions: (f32, f32), // (wheel_radius, robot_radius)
 }
@@ -56,8 +54,7 @@ where
         i2c_bus: &'static RefCell<I2C>,
         wheel_radius: Option<f32>,
         robot_radius: Option<f32>,
-    ) -> Self
-    {
+    ) -> Self {
         let wr = wheel_radius.unwrap_or(0.148f32);
         let rr = robot_radius.unwrap_or(0.195f32);
 
@@ -75,7 +72,7 @@ where
                 None
             }
         };
-        
+
         SystemController {
             sensors,
             robot_dimensions: (wr, rr),
@@ -86,8 +83,7 @@ where
     //noinspection ALL
     //noinspection ALL
     //noinspection ALL
-    pub async fn i2c_ch(&mut self) -> !
-    {
+    pub async fn i2c_ch(&mut self) -> ! {
         loop {
             let i2c_channel = I2C_CHANNEL.receiver().receive().await;
             tracing::info!("Received I2C Command: {:?}", i2c_channel);
@@ -99,8 +95,7 @@ where
                     Ok(None) => tracing::info!("I2C command executed successfully"),
                     Err(_) => tracing::error!("I2C command failed"),
                 }
-            }
-            else {
+            } else {
                 tracing::warn!(
                     "I2C command received but devices not initialized: {:?}",
                     i2c_channel
@@ -112,10 +107,10 @@ where
     //noinspection ALL
     //noinspection ALL
     // todo: implement LED control (generic)
-    pub async fn led_ch(self, adapter: Fuckleds ) -> !
+    /* pub async fn led_ch(self, adapter: Fuckleds ) -> !
     {
         let mut led_ctrl = LedModule::new(adapter);
-        
+
         loop {
             let cmd = LED_CHANNEL.receiver().receive().await;
             tracing::info!("LED Command: {:?}", &cmd);
@@ -123,5 +118,5 @@ where
                 tracing::error!("LED Command failed");
             }
         }
-    }
+    } */
 }
