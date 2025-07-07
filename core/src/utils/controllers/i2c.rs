@@ -2,6 +2,7 @@
 //! This module manages I2C-connected devices, including motor control and IMU
 //! integration.
 
+use crate::utils;
 use core::cell::RefCell;
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -13,8 +14,6 @@ use icm42670::{
 };
 use pwm_pca9685::{Address as PwmAddress, Channel, Error as PwmError, Pca9685};
 use serde::{Deserialize, Serialize};
-
-use crate::utils::controllers::{driver::WheelDriver, WheelKinematics};
 
 // Global communication channel for I2C commands.
 pub static I2C_CHANNEL: embassy_sync::channel::Channel<CriticalSectionRawMutex, I2CCommand, 16> =
@@ -63,7 +62,7 @@ pub struct I2CDevices<'a, I2C: 'static> {
     pwm: Option<Pca9685<RefCellDevice<'a, I2C>>>,
     imu: Option<Icm42670<RefCellDevice<'a, I2C>>>,
     motor_channels: [(Channel, Channel); 3],
-    kinematics: WheelKinematics,
+    embodied: utils::ek,
 }
 
 impl<'a, I2C, E> I2CDevices<'a, I2C>
@@ -85,7 +84,7 @@ where
                 (Channel::C2, Channel::C3),
                 (Channel::C4, Channel::C5),
             ],
-            kinematics: WheelKinematics::new(wheel_radius, robot_radius),
+            embodied: utils::ek::new(wheel_radius, robot_radius),
         }
     }
     pub fn init_devices(&mut self) -> Result<(), DeviceError<E>> {
@@ -150,7 +149,7 @@ where
                 let orientation = o.unwrap_or(0.0);
                 let new_orientation = (orientation + rs) % 360.0;
                 let wheel_speeds =
-                    self.kinematics
+                    self.embodied
                         .compute_wheel_velocities(s, d, new_orientation, rs);
                 self.apply_wheel_speeds(&wheel_speeds)?;
                 Ok(None)
@@ -174,7 +173,7 @@ where
         speed: f32,
     ) -> Result<(), DeviceError<E>> {
         let wheel_speeds = self
-            .kinematics
+            .embodied
             .compute_wheel_velocities(speed, direction, 0.0, 0.0);
         self.apply_wheel_speeds(&wheel_speeds)
     }
@@ -187,7 +186,7 @@ where
     ) -> Result<(), DeviceError<E>> {
         let new_orientation = (orientation.unwrap_or(0.0) + speed) % 360.0;
         let wheel_speeds =
-            self.kinematics
+            self.embodied
                 .compute_wheel_velocities(0.0, 0.0, new_orientation, speed);
         self.apply_wheel_speeds(&wheel_speeds)
     }
@@ -258,28 +257,5 @@ where
         }
 
         Ok(())
-    }
-}
-
-impl<'a, I2C, E> WheelDriver for I2CDevices<'_, I2C>
-where
-    I2C: embedded_hal::i2c::I2c<Error = E> + 'a,
-    E: core::fmt::Debug,
-{
-    type Error = DeviceError<E>;
-
-    fn read_wheel_speeds(&mut self) -> Result<[f32; 3], Self::Error> {
-        // here you might actually read encoders or fuse IMU data.
-        // For now, stub it or use your read_imu & a little math:
-        let ((_ax, _ay, _az), (gx, gy, gz), _) = self.read_imu()?;
-        // convert gyro about z into wheel speeds or whatever…
-        Ok([gx, gy, gz])
-    }
-
-    fn set_wheel_speeds(
-        &mut self,
-        speeds: [f32; 3],
-    ) -> Result<(), Self::Error> {
-        self.apply_wheel_speeds(&speeds)
     }
 }

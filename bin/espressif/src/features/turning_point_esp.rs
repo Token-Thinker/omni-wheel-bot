@@ -11,9 +11,7 @@ use esp_backtrace as _;
 use esp_hal::{
     clock::CpuClock,
     i2c::master::{Config, I2c},
-    rmt::{Channel, Rmt},
     rng::Rng,
-    time::Rate,
     timer::timg::TimerGroup,
     Blocking,
 };
@@ -22,33 +20,24 @@ use esp_wifi::{
     wifi::{WifiController, WifiDevice},
     EspWifiController,
 };
-use heapless::String;
 use log::LevelFilter;
 
-use embassy_net;
 
 // Internal Modules
-use omni_wheel::utils::SystemController;
-use omni_wheel::{mk_static, smart_led_buffer, task, Spawner, Runner, Stack, StackResources, Duration, Timer, utils::{
-    connection::app_server,
-    controllers::{I2CDevices, LedModule, I2C_CHANNEL, LED_CHANNEL},
-    packages::smart_leds::SmartLedsAdapter,
-}, StaticConfigV4};
+use omni_wheel::{mk_static, utils};
 
 // Constants for Wi-Fi credentials
 const SSID: &str = env!("SSID");
 const PASSWORD: &str = env!("PASSWORD");
-const BUF_SIZE: usize = 2 * 24 + 1;
 
 type Bus = I2c<'static, Blocking>;
-type LEDDrv = SmartLedsAdapter<Channel<Blocking, 0>, { BUF_SIZE }>;
 
 // Static memory for I2C devices
 static I2C_BUS: static_cell::StaticCell<RefCell<I2c<'static, Blocking>>> =
     static_cell::StaticCell::new();
 
 #[esp_hal_embassy::main]
-async fn main(spawner: Spawner) -> ! {
+async fn main(spawner: embassy_executor::Spawner) -> ! {
     esp_println::logger::init_logger(LevelFilter::Trace);
     tracing::info!("Logger initialized");
 
@@ -69,18 +58,7 @@ async fn main(spawner: Spawner) -> ! {
             .with_scl(scl_per),
     ));
 
-    cfg_if::cfg_if! {
-        if #[cfg(feature = "esp32h2")] {
-            let freq = Rate::from_mhz(32);
-        } else {
-            let freq = Rate::from_mhz(80);
-        }
-    }
-
-    let rmt = Rmt::new(peripherals.RMT, freq).unwrap();
-    let rmt_buffer = smart_led_buffer!(2);
-    let led_drv = SmartLedsAdapter::new(rmt.channel0, peripherals.GPIO12, rmt_buffer);
-    let sys_ctrl = SystemController::new(i2c_bus, None, None);
+    let sys_ctrl = utils::SystemController::new(i2c_bus, None, None);
 
     // Wi-Fi Configuration Block
     // *******************************************************************
@@ -96,7 +74,6 @@ async fn main(spawner: Spawner) -> ! {
         let mut dhcpv = embassy_net::DhcpConfig::default();
         dhcpv.server_port = 67;
         dhcpv.client_port = 68;
-        //dhcpv.hostname = Some(String::try_from("controller").unwrap());
         dhcpv
     };
 
@@ -111,55 +88,42 @@ async fn main(spawner: Spawner) -> ! {
         }
     }
 
-    //let sta_config = omni_wheel::Config::dhcpv4(dhcpv_config);
-    let sta_config = omni_wheel::Config::dhcpv4(dhcpv_config);
+    let sta_config = embassy_net::Config::dhcpv4(dhcpv_config);
     let seed = (rng.random() as u64) << 32 | rng.random() as u64;
 
     // Init network stack
-    let (sta_stack, sta_runner) = omni_wheel::new(
+    let (sta_stack, sta_runner) = embassy_net::new(
         wifi_sta_device,
         sta_config,
-        mk_static!(StackResources<3>, StackResources::<3>::new()),
+        mk_static!(embassy_net::StackResources<3>, embassy_net::StackResources::<3>::new()),
         seed,
     );
     // End of Wi-Fi Configuration Block
     // ************************************************************
 
     spawner.spawn(i2c_task(sys_ctrl)).ok();
-    spawner.spawn(led_task(led_drv)).ok();
     spawner.spawn(connection(controller)).ok();
     spawner.spawn(net_task(sta_runner)).ok();
 
     wait_for_network(&sta_stack).await;
 
-    app_server(0, 80, sta_stack, None).await;
+    utils::wss(0, 80, sta_stack, None).await;
 }
 
-#[task]
-async fn i2c_task(mut ctrl: SystemController<Bus>) -> ! {
-    SystemController::i2c_ch(&mut ctrl).await
+#[embassy_executor::task]
+async fn i2c_task(mut ctrl: utils::SystemController<Bus>) -> ! {
+    utils::SystemController::i2c_ch(&mut ctrl).await
 }
-#[task]
-async fn led_task(led_drv: SmartLedsAdapter<Channel<Blocking, 0>, { BUF_SIZE }>) -> ! {
-    tracing::info!("LED task started");
-    loop {}
-    //SystemController::led_ch(led_drv).await
-}
-
 /// Task to manage Wi-Fi connections
-#[task]
+#[embassy_executor::task]
 async fn connection(mut controller: WifiController<'static>) {
-    use core::convert::TryInto;
-
-    use {Duration, Timer};
     use esp_wifi::wifi::{ClientConfiguration, Configuration, WifiEvent, WifiState};
-
     tracing::info!("Device capabilities: {:?}", controller.capabilities());
     loop {
         match esp_wifi::wifi::wifi_state() {
             WifiState::StaConnected => {
                 controller.wait_for_event(WifiEvent::StaDisconnected).await;
-                Timer::after(Duration::from_millis(5000)).await;
+                utils::Timer::after(utils::Duration::from_millis(5000)).await;
             }
             _ => {}
         }
@@ -179,25 +143,25 @@ async fn connection(mut controller: WifiController<'static>) {
             Ok(_) => tracing::info!("Wi-Fi connected!"),
             Err(e) => {
                 tracing::info!("Failed to connect: {e:?}");
-                Timer::after(Duration::from_millis(5000)).await;
+                utils::Timer::after(utils::Duration::from_millis(5000)).await;
             }
         }
     }
 }
 
 /// Task to manage the network stack
-#[task]
-async fn net_task(mut runner: Runner<'static, WifiDevice<'static>>) {
+#[embassy_executor::task]
+async fn net_task(mut runner: embassy_net::Runner<'static, WifiDevice<'static>>) {
     runner.run().await;
 }
 
 /// Helper function to wait for network connection
-async fn wait_for_network(stack: &Stack<'static>) {
+async fn wait_for_network(stack: &embassy_net::Stack<'static>) {
     loop {
         if stack.is_link_up() {
             break;
         }
-        Timer::after(Duration::from_millis(500)).await;
+        utils::Timer::after(utils::Duration::from_millis(500)).await;
     }
 
     tracing::info!("Waiting to get IP address...");
@@ -206,6 +170,6 @@ async fn wait_for_network(stack: &Stack<'static>) {
             tracing::info!("Got IP: {}", config.address);
             break;
         }
-        Timer::after(Duration::from_millis(500)).await;
+        utils::Timer::after(utils::Duration::from_millis(500)).await;
     }
 }

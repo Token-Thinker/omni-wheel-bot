@@ -65,20 +65,6 @@ impl picoserve::Timer for ServerTimer {
 
 /// Handles incoming WebSocket connections.
 impl WebSocketCallback for WebSocket {
-    //noinspection ALL
-    //noinspection ALL
-    //noinspection ALL
-    //noinspection ALL
-    //noinspection ALL
-    //noinspection ALL
-    //noinspection ALL
-    //noinspection ALL
-    //noinspection ALL
-    //noinspection ALL
-    //noinspection ALL
-    //noinspection ALL
-    //noinspection ALL
-    //noinspection ALL
     async fn run<Reader, Writer>(
         self,
         mut rx: SocketRx<Reader>,
