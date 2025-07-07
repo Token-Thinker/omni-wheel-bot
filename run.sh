@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/owb-bin/env bash
 set -euo pipefail
 
 # Color constants
@@ -109,7 +109,7 @@ fi
 
 if $BUILD || $FLASH; then
     echo -e "${BLUE}${BOLD}▶ Select chip maker:${RESET}"
-    mapfile -t MAKER_OPTIONS < <(find bin -maxdepth 1 -mindepth 1 -type d | sed 's|.*/||')
+    mapfile -t MAKER_OPTIONS < <(find owb-bin -maxdepth 1 -mindepth 1 -type d | sed 's|.*/||')
     PS3="$(echo -e "${YELLOW}Choice [1-${#MAKER_OPTIONS[@]}]:${RESET} ")"
     select MAKER in "${MAKER_OPTIONS[@]}"; do
         [[ -n "$MAKER" ]] && break

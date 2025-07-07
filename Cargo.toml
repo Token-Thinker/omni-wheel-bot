@@ -1,7 +1,7 @@
 [workspace]
 members = [
-    "core",
-    "bin/espressif",
+    "owb-core",
+    "owb-bin/espressif",
 ]
 
 
@@ -11,8 +11,6 @@ resolver = "2"
 opt-level = "s"
 
 [profile.test]
-
-
 
 [profile.release]
 opt-level = "s"

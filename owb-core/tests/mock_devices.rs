@@ -4,7 +4,7 @@
 // pub const PWM_ADDRESS: u8 = 0x40;
 // pub const IMU_ADDRESS: u8 = 0x68;
 //
-// pub static I2C_CELL: static_cell::StaticCell<core::cell::RefCell<I2cMock>> =
+// pub static I2C_CELL: static_cell::StaticCell<owb-core::cell::RefCell<I2cMock>> =
 // static_cell::StaticCell::new();
 //
 // pub fn write(

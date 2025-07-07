@@ -87,7 +87,7 @@ where
     ) -> Result<(), E> {
         // Optionally apply brightness or gamma here. Example:
         // use smart_leds::brightness;
-        // let data = brightness(core::iter::repeat(color).take(LED_COUNT), 128);
+        // let data = brightness(owb-core::iter::repeat(color).take(LED_COUNT), 128);
 
         let data = core::iter::repeat(color).take(LED_COUNT);
         self.driver.write(data)

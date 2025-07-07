@@ -20,7 +20,7 @@ esp32s2 = []
 esp32s3 = ["esp-hal/esp32s3", "esp-hal-embassy/esp32s3", "esp-backtrace/esp32s3","esp-println/esp32s3","esp-wifi/esp32s3"]
 
 [dependencies]
-omni-wheel = { path = "../../core" }
+omni-wheel = { path = "../../owb-core" }
 
 # Board-specific and embedded dependencies
 cfg-if = "1.0.0"
