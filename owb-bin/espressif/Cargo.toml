@@ -20,7 +20,7 @@ esp32s2 = []
 esp32s3 = ["esp-hal/esp32s3", "esp-hal-embassy/esp32s3", "esp-backtrace/esp32s3","esp-println/esp32s3","esp-wifi/esp32s3"]
 
 [dependencies]
-omni-wheel = { path = "../../owb-core" }
+owb-core = { path = "../../owb-core" }
 
 # Board-specific and embedded dependencies
 cfg-if = "1.0.0"
@@ -33,16 +33,7 @@ esp-hal = { version = "1.0.0-beta.0", features = ["unstable", "psram"] }
 esp-hal-embassy = { version = "0.7.0"}
 esp-println = { version = "0.13.0", features = ["log"] }
 esp-wifi = { version = "0.13.0", features = ["wifi"] }
-hashbrown = { version = "0.15.2" }
-heapless = "0.8.0"
-icm42670 = { version = "0.2.0" }
-lazy_static = { version = "1.5.0", features = ["spin_no_std"] }
-libm = { version = "0.2.11" }
-log = { version = "0.4" }
 
-pwm-pca9685 = { version = "1.0.0" }
-serde = { version = "1", default-features = false, features = ["derive"] }
-serde_json = { version = "1", features = ["alloc"], default-features = false }
-smart-leds-trait = { version = "0.3.0" }
+log = { version = "0.4" }
 static_cell = { version = "2.0", features = ["nightly"] }
 tracing = { version = "0.1", default-features = false, features = ["log", "attributes"] }

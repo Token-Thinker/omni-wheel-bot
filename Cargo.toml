@@ -4,7 +4,6 @@ members = [
     "owb-bin/espressif",
 ]
 
-
 resolver = "2"
 
 [profile.dev]

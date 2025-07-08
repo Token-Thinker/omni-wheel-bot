@@ -62,3 +62,7 @@ Commands are sent to `/ws` as JSON. Top‑level tags:
 ## License
 This project is dual-licensed under MIT OR Apache-2.0.
 See [LICENSE-MIT] and [LICENSE-APACHE] in the project root for details.
+
+## Changelog
+
+See [CHANGELOG.md] for a summary of notable changes.

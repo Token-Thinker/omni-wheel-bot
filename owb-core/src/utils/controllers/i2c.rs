@@ -1,6 +1,7 @@
-//! I2C Devices Module
-//! This module manages I2C-connected devices, including motor control and IMU
-//! integration.
+//! I2C device management for the Omni-Wheel Bot.
+//!
+//! This module provides abstractions for initializing and controlling motor PWM drivers
+//! and the IMU sensor over a shared I2C bus. Commands are received via `I2C_CHANNEL`.
 
 use crate::utils;
 use core::cell::RefCell;
@@ -15,11 +16,11 @@ use icm42670::{
 use pwm_pca9685::{Address as PwmAddress, Channel, Error as PwmError, Pca9685};
 use serde::{Deserialize, Serialize};
 
-// Global communication channel for I2C commands.
+/// Channel used to receive I2C commands (`I2CCommand` messages).
 pub static I2C_CHANNEL: embassy_sync::channel::Channel<CriticalSectionRawMutex, I2CCommand, 16> =
     embassy_sync::channel::Channel::new();
 
-/// Represents possible device-related errors.
+/// Errors that can occur when interacting with I2C-based devices.
 #[derive(Debug)]
 pub enum DeviceError<E: core::fmt::Debug> {
     PwmError(PwmError<E>),
@@ -29,9 +30,11 @@ pub enum DeviceError<E: core::fmt::Debug> {
     PwmNotInitialized,
 }
 
-/// Unified command structure for I2C operations.
+/// I2C command variants for motion control and device management.
+///
+/// Serialized as JSON with tag `"ic"`.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy)]
-#[serde(tag = "ic", rename_all = "snake_case")] // ic = 12c command
+#[serde(tag = "ic", rename_all = "snake_case")]
 pub enum I2CCommand {
     // Motion Control Variants
     /// Omnidirectional translation (no rotation).
@@ -55,11 +58,11 @@ pub enum I2CCommand {
     Disable,
 }
 
-/// Manages I2C devices including PWM motor controller and IMU.
+/// High-level driver for PWM motor controller and IMU over a shared I2C bus.
 pub struct I2CDevices<'a, I2C: 'static> {
     #[allow(dead_code)]
     i2c: &'a RefCell<I2C>,
-    pwm: Option<Pca9685<RefCellDevice<'a, I2C>>>,
+    pub pwm: Option<Pca9685<RefCellDevice<'a, I2C>>>,
     imu: Option<Icm42670<RefCellDevice<'a, I2C>>>,
     motor_channels: [(Channel, Channel); 3],
     embodied: utils::ek,
@@ -70,6 +73,7 @@ where
     I2C: I2c<Error = E> + 'static,
     E: core::fmt::Debug,
 {
+    /// Create a new I2CDevices manager with specified wheel and robot dimensions.
     pub fn new(
         i2c_bus: &'a RefCell<I2C>,
         wheel_radius: f32,
@@ -87,6 +91,9 @@ where
             embodied: utils::ek::new(wheel_radius, robot_radius),
         }
     }
+    /// Initialize the IMU and PWM motor controller on the I2C bus.
+    ///
+    /// On success, both `self.imu` and `self.pwm` are set. Returns error if initialization fails.
     pub fn init_devices(&mut self) -> Result<(), DeviceError<E>> {
         let imu = Icm42670::new(RefCellDevice::new(&self.i2c), ImuAddress::Primary)
             .map_err(DeviceError::ImuError)?;
@@ -97,6 +104,7 @@ where
         self.pwm = Some(pwm);
         Ok(())
     }
+    /// Scan the I2C bus for devices and log any found addresses.
     pub fn scan_bus(&self) {
         let mut bus = self.i2c.borrow_mut();
         for addr in 0x03..0x78 {
@@ -105,6 +113,7 @@ where
             }
         }
     }
+    /// Configure and enable the PWM motor driver (prescale to 60Hz).
     pub fn configure_pwm(&mut self) -> Result<(), DeviceError<E>> {
         if let Some(pca) = &mut self.pwm {
             pca.enable().map_err(DeviceError::PwmError)?;
@@ -117,6 +126,7 @@ where
 
         Ok(())
     }
+    /// Perform an initial IMU data read and log accelerometer, gyro, and temperature.
     pub fn init_imu_data(&mut self) {
         match self.read_imu() {
             Ok((accel, gyro, temp)) => {
@@ -131,7 +141,9 @@ where
         }
     }
 
-    /// Processes and executes I2C commands.
+    /// Execute a high-level `I2CCommand`, performing motion or sensor operations.
+    ///
+    /// Returns sensor data for `ReadIMU` or `None` for other commands.
     pub fn execute_command(
         &mut self,
         command: I2CCommand,
@@ -185,14 +197,14 @@ where
         orientation: Option<f32>,
     ) -> Result<(), DeviceError<E>> {
         let new_orientation = (orientation.unwrap_or(0.0) + speed) % 360.0;
-        let wheel_speeds =
-            self.embodied
-                .compute_wheel_velocities(0.0, 0.0, new_orientation, speed);
+        let wheel_speeds = self
+            .embodied
+            .compute_wheel_velocities(0.0, 0.0, new_orientation, speed);
         self.apply_wheel_speeds(&wheel_speeds)
     }
 
     /// Applies calculated motor speeds using the PWM driver.
-    pub(crate) fn apply_wheel_speeds(
+    pub fn apply_wheel_speeds(
         &mut self,
         wheel_speeds: &[f32],
     ) -> Result<(), DeviceError<E>> {
@@ -221,7 +233,11 @@ where
         todo!("Need to implement function for bulk all on and off for simulations changes")
     }
 
-    /// Reads IMU sensor data.
+    /// Read accelerometer, gyroscope, and temperature data from the IMU.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(((ax, ay, az), (gx, gy, gz), temp))` on success.
     pub fn read_imu(&mut self) -> Result<((f32, f32, f32), (f32, f32, f32), f32), DeviceError<E>> {
         let imu = self.imu.as_mut().ok_or(DeviceError::ImuNotInitialized)?;
         let accel = imu.accel_norm().map_err(DeviceError::AccelError)?;
@@ -231,7 +247,7 @@ where
         Ok(((accel.x, accel.y, accel.z), (gyro.x, gyro.y, gyro.z), temp))
     }
 
-    /// Enables both PWM and IMU devices.
+    /// Enable the PWM motor controller and power up the IMU sensor.
     pub fn enable(&mut self) -> Result<(), DeviceError<E>> {
         if let Some(pca) = self.pwm.as_mut() {
             pca.enable().map_err(DeviceError::PwmError)?;
@@ -245,7 +261,7 @@ where
         Ok(())
     }
 
-    /// Disables both PWM and IMU devices.
+    /// Disable motor PWM and put the IMU into sleep mode.
     pub fn disable(&mut self) -> Result<(), DeviceError<E>> {
         if let Some(pca) = self.pwm.as_mut() {
             pca.disable().map_err(DeviceError::PwmError)?;

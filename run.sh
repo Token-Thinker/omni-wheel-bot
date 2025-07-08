@@ -1,4 +1,4 @@
-#!/usr/owb-bin/env bash
+#!/usr/bin/env bash
 set -euo pipefail
 
 # Color constants
@@ -54,7 +54,7 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
-RUST_VERSION=$(sed -n 's/^rust-version *= *"\([^"]\+\)".*/\1/p' core/Cargo.toml)
+RUST_VERSION=$(sed -n 's/^rust-version *= *"\([^"]\+\)".*/\1/p' owb-core/Cargo.toml)
 
 
 
@@ -143,7 +143,7 @@ if $BUILD || $FLASH; then
     echo
 
     echo -e "${BLUE}${BOLD}▶ Select firmware binary:${RESET}"
-    mapfile -t BIN_OPTIONS < <(cd "bin/${MAKER}/src/features" && find . -maxdepth 1 -type f -name "*.rs" | sed 's|^\./||;s|\.rs$||')
+    mapfile -t BIN_OPTIONS < <(cd "owb-bin/${MAKER}/src/features" && find . -maxdepth 1 -type f -name "*.rs" | sed 's|^\./||;s|\.rs$||')
     PS3="$(echo -e "${YELLOW}"Choice [1-${#BIN_OPTIONS[@]}]:"${RESET}" )"
     select BIN in "${BIN_OPTIONS[@]}"; do
         [[ -n "$BIN" ]] && break
@@ -196,8 +196,8 @@ if $BUILD; then
       -c "\
         rustc --version --verbose && \
         rustup show active-toolchain && \
-        cd /workspace/bin/"$MAKER" && \
-        rustup run esp cargo "$BOARD" --bin "$BIN" -q --color=always\
+        cd /workspace/bin/""$MAKER"" && \
+        rustup run esp cargo ""$BOARD"" --bin ""$BIN"" -q --color=always\
       "
 
     echo -e "${GREEN}${BOLD}=== BUILD COMPLETE ===${RESET}"

@@ -1,8 +1,20 @@
-#[allow(dead_code)]
+//! Kinematics utilities for 3-wheeled omni-directional robots.
+//!
+//! The `EmbodiedKinematics` struct computes wheel velocity mappings based on
+//! desired translational and rotational motion and inverts wheel measurements back
+//! to body velocities.
+//!
+//! # Example
+//! ```rust
+//! use owb_core::utils::math::kinematics::EmbodiedKinematics;
+//! let kin = EmbodiedKinematics::new(0.148, 0.195);
+//! let wheel_speeds = kin.compute_wheel_velocities(1.0, 90.0, 0.0, 0.0);
+//! ```
+//!
 use core::f32::consts::PI;
 use libm;
 
-/// Represents the kinematics of a 3-wheeled omni-wheel robot
+/// Represents the kinematics of a three-wheeled omni-wheel robot.
 pub struct EmbodiedKinematics {
     /// Radius of each wheel (m)
     wheel_radius: f32,
@@ -26,7 +38,10 @@ impl EmbodiedKinematics {
         }
     }
 
-    /// Transform global vector (speed, angle) into body-frame (vx, vy)
+    /// Transform a global motion command into body-frame velocities.
+    ///
+    /// `speed` is the translational magnitude, `angle` and `orientation` are in degrees
+    /// (0° = +X, increasing CCW). Returns `(vx, vy)` in the robot's body frame.
     pub fn convert_to_body_frame(
         speed: f32,
         angle: f32,
@@ -52,7 +67,11 @@ impl EmbodiedKinematics {
         j
     }
 
-    /// Invert measured wheel speeds back to body-frame velocity
+    /// Recover body velocities from measured wheel speeds.
+    ///
+    /// # Returns
+    ///
+    /// `(vx, vy, ω)` where `vx`/`vy` are linear body-frame velocities and `ω` is angular velocity.
     pub fn compute_body_velocity(
         &self,
         wheel_velocity: [f32; 3],
@@ -71,7 +90,10 @@ impl EmbodiedKinematics {
         (vx, vy, w)
     }
 
-    /// Compute individual wheel speeds given desired motion
+    /// Compute wheel angular velocities to achieve the desired motion.
+    ///
+    /// `speed` is forward translational speed, `angle` and `orientation` are in degrees,
+    /// and `omega` is rotational speed (deg/sec). Returns an array of wheel speeds.
     pub fn compute_wheel_velocities(
         &self,
         speed: f32,
@@ -100,7 +122,11 @@ impl EmbodiedKinematics {
     }
 }
 
-/// Invert a 3×3 matrix via cofactor expansion
+/// Invert a 3×3 matrix using cofactor expansion.
+///
+/// # Panics
+///
+/// Panics if the matrix is singular (determinant is zero).
 fn invert_3x3(m: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
     let det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
         - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
@@ -123,4 +149,58 @@ fn invert_3x3(m: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
             (m[0][0] * m[1][1] - m[0][1] * m[1][0]) * inv_det,
         ],
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_convert_to_body_frame() {
+        // Forward at 0°, no orientation offset => body vx=0, vy=1
+        let (vx, vy) = EmbodiedKinematics::convert_to_body_frame(1.0, 0.0, 0.0);
+        assert!((vx - 0.0).abs() < 1e-6);
+        assert!((vy - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_invert_3x3_identity() {
+        let id = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        let inv = invert_3x3(id);
+        for i in 0..3 {
+            for j in 0..3 {
+                assert!(
+                    (inv[i][j] - id[i][j]).abs() < 1e-6,
+                    "inv != id at {}:{}",
+                    i,
+                    j
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_compute_wheel_velocities_zero() {
+        let kin = EmbodiedKinematics::new(0.1, 0.2);
+        let wheels = kin.compute_wheel_velocities(0.0, 0.0, 0.0, 0.0);
+        assert_eq!(wheels, [0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn test_round_trip_body_velocity() {
+        let kin = EmbodiedKinematics::new(0.1, 0.2);
+        // Some arbitrary motion command
+        let speed = 1.23;
+        let angle = 45.0;
+        let orientation = 10.0;
+        let omega = 0.5;
+        // Compute wheel speeds, then invert back
+        let wheel_speeds = kin.compute_wheel_velocities(speed, angle, orientation, omega);
+        let (vx, vy, w) = kin.compute_body_velocity(wheel_speeds);
+        // vx, vy, w should approximate body-frame motion
+        let (exp_vx, exp_vy) = EmbodiedKinematics::convert_to_body_frame(speed, angle, orientation);
+        assert!((vx - exp_vx).abs() < 1e-3);
+        assert!((vy - exp_vy).abs() < 1e-3);
+        assert!((w - omega).abs() < 1e-3);
+    }
 }

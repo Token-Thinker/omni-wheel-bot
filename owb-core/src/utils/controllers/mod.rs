@@ -1,13 +1,12 @@
-//! Module Exports
+//! Controllers and command definitions for Omni-Wheel Bot hardware.
 //!
-//! This file exports key modules used in the robotics control system.
+//! This module contains submodules and types for managing I2C devices (motors, IMU)
+//! and addressable LEDs, and defines the `SystemCommand` enum for incoming commands.
 //!
-//! - `i2c_devices`: Handles I2C-connected devices such as motor controllers and
-//!   IMUs.
-//! - `wheel_kinematics`: Manages wheel kinematics calculations for omni-wheel
-//!   robots.
+//! Submodules:
+//! - `i2c`: Motor PWM and IMU control over I2C bus
+//! - `leds`: Addressable LED strip control
 
-/// Module for managing I2C-connected devices.
 pub mod i2c;
 pub mod leds;
 
@@ -32,6 +31,10 @@ impl<I2C> SystemController<I2C>
 where
     I2C: embedded_hal::i2c::I2c + 'static,
 {
+    /// Create a new system controller for motor and IMU devices.
+    ///
+    /// `i2c_bus` is the shared I2C bus reference. `wheel_radius` and `robot_radius`
+    /// (in meters) default to 0.148 and 0.195 respectively if `None`.
     pub fn new(
         i2c_bus: &'static RefCell<I2C>,
         wheel_radius: Option<f32>,
@@ -61,6 +64,10 @@ where
         }
     }
 
+    /// Start processing incoming `SystemCommand` messages indefinitely.
+    ///
+    /// This loop receives commands from the global I2C_CHANNEL and dispatches
+    /// motor/IMU operations. Never returns.
     pub async fn i2c_ch(&mut self) -> ! {
         loop {
             let i2c_channel = i2c::I2C_CHANNEL.receiver().receive().await;
