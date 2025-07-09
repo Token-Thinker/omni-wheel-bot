@@ -1,0 +1,19 @@
+[package]
+name = "mock-mcu"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = { version = "4.5.40", features = ["derive"] }
+embassy-executor = "0.7.0"
+embassy-net = "0.7.0"
+embassy-net-tuntap = "0.1.0"
+static_cell = "2.1"
+heapless = "0.8"
+rand_core = "0.9.3"
+owb-core = { path = "../../owb-core" }
+embedded-hal-mock = { version = "0.11.1", features = ["eh1"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
+tracing = { version = "0.1", features = ["log"] }
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }

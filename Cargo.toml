@@ -1,0 +1,21 @@
+[workspace]
+members = [
+    "owb-core",
+    "owb-app/mock-mcu",
+]
+
+resolver = "2"
+
+[profile.dev]
+opt-level = "s"
+
+[profile.test]
+
+[profile.release]
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+debug = true
+debug-assertions = false
+incremental = false
+overflow-checks = false

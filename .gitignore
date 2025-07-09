@@ -1,1 +1,15 @@
-/target
+## Build artifacts
+debug/
+target/
+
+## Environment variables
+.env
+
+## Backup files
+**/*.rs.bk
+
+## Windows debug information
+*.pdb
+
+# JetBrains IDE files
+.idea/
