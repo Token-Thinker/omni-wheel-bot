@@ -9,7 +9,7 @@ owb-core = { path = "../../owb-core", features = ["serde", "sim"] }
 # instead of embedding it at compile time.
 tower-http = { version = "0.5", features = ["fs"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "sync"] }
-axum = { version = "0.7", features = ["ws"] }
+axum = { version = "0.8", features = ["ws"] }
 tower = { version = "0.4" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
