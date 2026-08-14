@@ -53,7 +53,7 @@ serde = { version = "1", default-features = false, features = ["derive", "alloc"
 serde_json = { version = "1", default-features = false, features = ["alloc"] }
 tracing = { version = "0.1.44", default-features = false, features = ["log", "attributes", "release_max_level_info"] }
 
-picoserve = { version = "0.18.0", features = ["embassy", "ws"], optional = true }
+picoserve = { version = "0.19.0", features = ["embassy", "ws"], optional = true }
 embassy-net = {version = "0.9", features = ["udp","dhcpv4"], optional = true}
 embedded-io-async = { version = "0.7.0", optional = true }
 hashbrown = { version = "0.16.1", optional = true }
