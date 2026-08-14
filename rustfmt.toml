@@ -1,7 +1,11 @@
 # Comments
-format_code_in_doc_comments = true
-normalize_comments          = true
-wrap_comments               = true
+# Intentionally OFF: comments are hand-authored explanations aimed at readers of
+# the published crate (crates.io). rustfmt must never re-wrap, normalize, or
+# reformat them — only code layout is normalized. Do not flip these back on
+# without a deliberate decision to let rustfmt reflow prose.
+format_code_in_doc_comments = false
+normalize_comments          = false
+wrap_comments               = false
 
 # Imports
 reorder_imports     = true
@@ -16,7 +20,10 @@ enum_discrim_align_threshold = 35
 
 
 #Body
-brace_style = "AlwaysNextLine"
+# SameLineWhere matches the actual hand-written style used across the entire
+# codebase since init. The previous "AlwaysNextLine" never matched the code and
+# only surfaced as whole-repo diffs once a newer nightly began honoring it.
+brace_style = "SameLineWhere"
 control_brace_style = "ClosingNextLine"
 condense_wildcard_suffixes = true
 fn_params_layout = "Vertical"

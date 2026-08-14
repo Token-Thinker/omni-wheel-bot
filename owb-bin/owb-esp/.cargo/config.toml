@@ -1,0 +1,44 @@
+[alias]
+esp32s3 = "build --release --features=esp32s3 --target=xtensa-esp32s3-none-elf"
+
+[target.'cfg(target_arch = "riscv32")']
+rustflags = [
+    "-C", "link-arg=-Tlinkall.x",
+    "-C", "force-frame-pointers",
+]
+
+[target.'cfg(target_arch = "xtensa")']
+rustflags = [
+    # GNU LD
+    "-C", "link-arg=-Wl,-Tlinkall.x",
+    "-C", "link-arg=-nostartfiles",
+
+    # LLD
+    # "-C", "link-arg=-Tlinkall.x",
+    # "-C", "linker=rust-lld",
+]
+
+[env]
+ESP_LOG="INFO"
+
+# ESP_HAL_CONFIG_PSRAM_MODE removed in esp-hal 1.1 (PSRAM mode is now a runtime
+# PsramConfig field). The `psram` feature is not enabled here, so it is dropped.
+ESP_HAL_CONFIG_PLACE_SWITCH_TABLES_IN_RAM="true"
+ESP_HAL_CONFIG_PLACE_ANON_IN_RAM="true"
+
+# esp-wifi -> esp-radio (1.0.0-beta.0): the config prefix is now
+# ESP_RADIO_CONFIG_ and most build-time WiFi tuning options were removed.
+# Only mtu / max_burst_size survive as build-time config here.
+ESP_RADIO_CONFIG_WIFI_MTU="4000"
+ESP_RADIO_CONFIG_WIFI_MAX_BURST_SIZE="10"
+# WiFi packet-dump diagnostic (ESP_RADIO_CONFIG_DUMP_PACKETS): leave unset here
+# and enable per-build with `OWB_DUMP_PACKETS=1 ./scripts/run_app.sh ...` (wired in
+# scripts/makers/owb-esp.sh). Logs every rx/tx frame to localize the SoftAP
+# unicast-TCP delivery gap (backlog P1). Very verbose — do not ship enabled.
+# Dropped (no longer build-time config in esp-radio 1.0): COUNTRY_CODE,
+# TX_QUEUE_SIZE, STATIC_RX_BUF_NUM, DYNAMIC_RX_BUF_NUM, DYNAMIC_TX_BUF_NUM,
+# RX_BA_WIN, TICK_RATE_HZ. Buffer/queue sizing is now driver-default; revisit
+# if camera-stream throughput regresses. Country code, if needed, is set at runtime.
+
+[unstable]
+build-std = ["core", "alloc"]

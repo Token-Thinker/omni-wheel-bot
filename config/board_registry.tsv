@@ -1,0 +1,15 @@
+# kind	value	maker	board	bin	profile	label
+# Supported kinds:
+#   serial
+#   vidpid
+#   port
+#   product_contains
+#   manufacturer_contains
+#
+# Add custom-board mappings here as your lab inventory becomes known.
+# Example:
+# serial	ABC123456789	owb-esp	esp32s3	owb-esp	owb-esp32s3-v1	OWB ESP32-S3 V1 (lab unit A)
+
+manufacturer_contains	Seeed	owb-esp	esp32s3	owb-esp	xiao-seedstudio-sense-cam	Seeed XIAO ESP32S3 Sense
+product_contains	ESP32-S3-DevKitC-1	owb-esp	esp32s3	owb-esp	esp32-s3-devkitc-1-n32r16	Espressif ESP32-S3-DevKitC-1
+product_contains	USB JTAG/serial debug unit	owb-esp	esp32s3	owb-esp		ESP32-S3 class device

@@ -1,0 +1,17 @@
+{
+  "name": "owb-ui-ts",
+  "version": "0.1.9",
+  "private": true,
+  "description": "TypeScript source for the OWB embedded operator UI bundle.",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "dev": "node build.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0",
+    "typescript": "^5.5.0"
+  }
+}

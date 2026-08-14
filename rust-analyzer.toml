@@ -1,0 +1,5 @@
+[cargo]
+# owb-esp requires the Xtensa esp toolchain + nightly build-std, only available
+# inside the Docker container (espressif/idf-rust). Exclude it from host-side
+# analysis so rust-analyzer doesn't report a spurious Cargo:failed on startup.
+exclude = ["owb-bin/owb-esp"]

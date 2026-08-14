@@ -1,0 +1,42 @@
+[package]
+name = "owb-esp"
+version = "0.2.0"
+edition = "2021"
+
+[[bin]]
+name = "owb-esp"
+path = "src/owb-esp.rs"
+
+
+[features]
+esp32s3 = ["esp-hal/esp32s3", "esp-rtos/esp32s3", "esp-backtrace/esp32s3","esp-println/esp32s3","esp-radio/esp32s3", "esp-bootloader-esp-idf/esp32s3"]
+# Trim camera code for no-camera ESP32-S3 profiles without mutating global RUSTFLAGS.
+no-camera = []
+# Enable actual GPIO-backed executors for supported boards.
+real-executors = []
+# Compile debug/trace tracing events into release builds for developer
+# telemetry (default release drops them). Build with `OWB_DEV_TELEMETRY=1`.
+dev-telemetry = ["owb-core/dev-telemetry"]
+# BLE GATT control transport (scaffold). Default OFF so the working image is
+# unaffected. Wiring the radio adds `dep:trouble-host`, `dep:bt-hci`, and
+# `esp-radio/ble` here once versions are pinned against esp-radio 0.17.
+ble = []
+
+[dependencies]
+owb-core = { path = "../../owb-core", features = ["net", "serde"], version = "0.2.0" }
+
+# Board-specific and embedded dependencies
+embassy-executor = { version = "0.10.0" }
+embassy-net = { version = "0.9", features = ["dhcpv4"] }
+embassy-time = { version = "0.5" }
+
+esp-alloc = { version = "0.10.0" }
+esp-backtrace = { version = "0.19.0", features = ["println", "panic-handler"] }
+esp-bootloader-esp-idf = { version = "0.5" }
+esp-hal = { version = "1.1", features = ["unstable"] }
+esp-rtos = { version = "0.3.0", features = ["embassy", "esp-radio"] }
+esp-println = { version = "0.17.0", features = ["log-04"] }
+esp-radio = { version = "1.0.0-beta.0", features = ["wifi"] }
+
+log = { version = "0.4" }
+picoserve = { version = "0.18.0", features = ["embassy"] }

@@ -1,9 +1,22 @@
 ## Build artifacts
 debug/
 target/
+.owb_target/
+.owb_hil_logs/
+.owb_last_target
+__pycache__/
+*.pyc
 
-## Environment variables
+## Front-end assets and schematic PDF are tracked in source control
+app/transport/
+schematic/
+
+## Environment variables — never commit credentials
 .env
+.env.local
+config/devkit_wiring.local.env
+# compile-time WiFi config (alternative to env vars)
+owb-bin/owb-esp/cfg.toml
 
 ## Backup files
 **/*.rs.bk

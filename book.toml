@@ -1,0 +1,50 @@
+# mdBook configuration for the Omni-Wheel Bot documentation site.
+#
+# To build locally:
+#   # Install (one-time, user-local, no sudo):
+#   #   cargo install mdbook --locked
+#   #   cargo install mdbook-mermaid --locked   # optional, only if diagrams are added
+#   mdbook build           # writes the rendered site to ./target/book
+#   mdbook serve --open    # live preview at http://localhost:3000
+#
+# CI builds use peaceiris/actions-mdbook@v2 (see .github/workflows/docs.yml).
+
+[book]
+title       = "Omni-Wheel Bot - Design and Operations"
+description = "Core drivers and utilities for the Omni-Wheel Bot (no-std embedded robotics)"
+authors     = ["Omni-Wheel Bot Contributors"]
+src         = "docs"
+language    = "en"
+multilingual = false
+
+[build]
+build-dir       = "target/book"
+create-missing  = false
+
+# Diagram-as-code: Mermaid blocks in the docs are rendered by mdbook-mermaid.
+# One-time asset install after enabling: `mdbook-mermaid install .`
+[preprocessor.mermaid]
+command = "mdbook-mermaid"
+
+[output.html]
+default-theme         = "navy"
+preferred-dark-theme  = "navy"
+copy-fonts            = true
+mathjax-support       = true
+additional-js         = ["mermaid.min.js", "mermaid-init.js"]
+git-repository-url    = "https://github.com/Token-Thinker/omni-wheel-bot"
+edit-url-template     = "https://github.com/Token-Thinker/omni-wheel-bot/edit/main/{path}"
+
+[output.html.search]
+enable              = true
+limit-results       = 30
+use-boolean-and     = true
+boost-title         = 2
+boost-hierarchy     = 2
+boost-paragraph     = 1
+expand              = true
+heading-split-level = 3
+
+[output.html.fold]
+enable = true
+level  = 1

@@ -1,0 +1,6 @@
+# Espressif ESP32 native USB-JTAG (vid:pid 303a:1001 — used by ESP32-S3 owb-esp firmware)
+SUBSYSTEM=="usb", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1001", MODE="0666", GROUP="dialout"
+# Espressif USB-to-UART bridge (CP210x, used by some devkits)
+SUBSYSTEM=="usb", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", MODE="0666", GROUP="dialout"
+# WCH CH340 USB-to-UART (common on cheaper devkits)
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", MODE="0666", GROUP="dialout"

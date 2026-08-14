@@ -1,7 +1,10 @@
 [workspace]
 members = [
     "owb-core",
-    "owb-app/mock-mcu",
+    "owb-msg",
+    "owb-ui",
+    "owb-bin/owb-esp",
+    "owb-bin/owb-host-sim",
 ]
 
 resolver = "2"

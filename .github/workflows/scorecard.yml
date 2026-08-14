@@ -1,0 +1,43 @@
+name: OpenSSF Scorecard
+
+on:
+  # Run weekly so the badge stays current.
+  schedule:
+    - cron: '30 1 * * 1'
+  # Also run on every push to main so results reflect the latest state.
+  push:
+    branches: [main]
+
+# Scorecard requires elevated permissions to publish results to GitHub's
+# Security tab (SARIF upload) and to prove provenance via OIDC.
+permissions:
+  contents: read
+  security-events: write
+  id-token: write
+
+jobs:
+  scorecard:
+    name: OpenSSF Scorecard
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Run Scorecard
+        uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
+        with:
+          results_file: scorecard-results.sarif
+          results_format: sarif
+          # publish_results requires a PUBLIC repo to post to api.securityscorecards.dev.
+          # Set to true and re-enable the SARIF upload step once the repo is public.
+          publish_results: false
+
+      # Uncomment when the repo is made public (SARIF upload needs GitHub Advanced Security).
+      # - name: Upload SARIF to GitHub Security tab
+      #   uses: github/codeql-action/upload-sarif@a2983b8bed1923f44751c5c43237f479442827b3 # v3
+      #   with:
+      #     sarif_file: scorecard-results.sarif
+      #     wait-for-processing: true

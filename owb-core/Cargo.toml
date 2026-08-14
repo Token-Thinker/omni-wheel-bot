@@ -1,8 +1,9 @@
 [package]
 name = "owb-core"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-rust-version = "1.85.0"
+rust-version = "1.95.0"
+authors = ["Token Thinkers"]
 license = "MIT OR Apache-2.0"
 description = "Core drivers and utilities for the Omni‑Wheel Bot (no‑std embedded robotics)"
 readme = "README.md"
@@ -12,24 +13,57 @@ documentation = "https://docs.rs/owb-core"
 keywords = ["embedded", "no-std", "robotics", "omni-wheel", "embassy"]
 categories = ["embedded", "no-std", "science::robotics"]
 
+[features]
+default = ["serde"]
+serde = ["dep:serde"]
+# Enable std support for host-only functionality.
+std = []
+sim = ["std", "serde"]
+# net: web + ws + time + executor + net stack
+net = [
+    "dep:picoserve",
+    "dep:embassy-net",
+    "dep:embedded-io-async",
+    "dep:hashbrown",
+    "dep:lazy_static",
+    "dep:embassy-sync",
+    "dep:embassy-time",
+    "serde",
+    "dep:embassy-executor",
+]
+# Signal that HTTP routes for the PWA UI should be registered.  The actual
+# UI assets (dist/) are embedded by the consuming binary (owb-esp) via
+# include_bytes!, not by owb-core.  This feature no longer pulls in the
+# owb-ui crate (which is WASM-only and cannot link into ESP32 firmware).
+owb-ui = []
+# leds: optional LED traits
+leds = ["dep:smart-leds-trait"]
+# dev-telemetry: raise the compile-time tracing ceiling so debug!/trace! events
+# are emitted in release builds (they are otherwise dropped — see the
+# release_max_level_info cap on the tracing dep). The most-verbose enabled
+# release_max_level_* feature wins, so this overrides the default info cap.
+# Runtime visibility still requires OWB_LOG_LEVEL=debug/trace.
+dev-telemetry = ["tracing/release_max_level_trace"]
+
 [dependencies]
+owb-msg = { path = "../owb-msg", version = "0.1.0", default-features = false, features = ["serde"] }
 embedded-hal = { version = "1.0" }
-embedded-hal-bus = { version = "0.3.0", features = ["async"] }
-embedded-io-async = { version = "0.6" }
-embassy-net = {version = "0.7.0"}
-embassy-sync = {version =  "0.7.0" }
-embassy-time = {version = "0.4.0"}
-hashbrown = { version = "0.15.2" }
-icm42670 = { version = "0.2.0" }
-lazy_static = { version = "1.5.0", features = ["spin_no_std"] }
 libm = { version = "0.2.11" }
-picoserve = { version = "0.16.0", features = ["embassy"] }
-pwm-pca9685 = { version = "1.0.0" }
-serde = { version = "1", default-features = false, features = ["derive"] }
-serde_json = { version = "1", features = ["alloc"], default-features = false }
-static_cell = { version = "2.0", features = ["nightly"] }
-smart-leds-trait = { version = "0.3.0" }
-tracing = { version = "0.1", default-features = false, features = ["log","attributes"] }
+serde = { version = "1", default-features = false, features = ["derive", "alloc"], optional = true }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
+tracing = { version = "0.1.44", default-features = false, features = ["log", "attributes", "release_max_level_info"] }
+
+picoserve = { version = "0.18.0", features = ["embassy", "ws"], optional = true }
+embassy-net = {version = "0.9", features = ["udp","dhcpv4"], optional = true}
+embedded-io-async = { version = "0.7.0", optional = true }
+hashbrown = { version = "0.16.1", optional = true }
+lazy_static = { version = "1.5.0", features = ["spin_no_std"], optional = true }
+smart-leds-trait = { version = "0.3.0", optional = true }
+embassy-sync = { version = "0.7.2", optional = true }
+embassy-time = { version = "0.5.0", optional = true }
+embassy-executor = { version = "0.10.0", optional = true }
+static_cell = { version = "2.1.1" }
 
 [dev-dependencies]
 embedded-hal-mock = { version = "0.11.1", features = ["eh1"] }
+critical-section = { version = "1.2.0", features = ["std"] }

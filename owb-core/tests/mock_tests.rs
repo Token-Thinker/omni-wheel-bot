@@ -1,120 +1,165 @@
-use core::cell::RefCell;
+use owb_core::{
+    ctrl::{sysctrl::I2CCommand, Imu, ImuData, Lights, MotorPwm, SystemController},
+    motion::kinematics::EmbodiedKinematics,
+};
 
-use embedded_hal_bus::i2c::RefCellDevice;
-use embedded_hal_mock::eh1::i2c::{Mock as I2cMock, Transaction as I2cTrans};
-use owb_core::utils::controllers::i2c::I2CDevices;
-use pwm_pca9685::{Address as PwmAddress, Pca9685};
-use owb_core::utils::math::kinematics::EmbodiedKinematics;
-use owb_core::utils::connection::server::{WebSocket, ServerTimer};
-
-
-/// Default I2C address for the PWM motor controller.
-pub const PWM_ADDRESS: u8 = 0x55;
-/// Default I2C address for the IMU sensor.
-pub const IMU_ADDRESS: u8 = 0x68;
-
-/// Create a write transaction for the given I2C address and data payload.
-pub fn write(
-    addr: u8,
-    data: Vec<u8>,
-) -> I2cTrans {
-    I2cTrans::write(addr, data)
+struct MockPwm {
+    last: [f32; 3],
+    enabled: bool,
 }
-/// Create a write_read transaction for the given I2C address/payloads.
-pub fn write_read(
-    addr: u8,
-    write: Vec<u8>,
-    read: Vec<u8>,
-) -> I2cTrans {
-    I2cTrans::write_read(addr, write, read)
+impl MotorPwm for MockPwm {
+    type Error = ();
+    fn enable(&mut self) -> Result<(), Self::Error> {
+        self.enabled = true;
+        Ok(())
+    }
+    fn disable(&mut self) -> Result<(), Self::Error> {
+        self.enabled = false;
+        Ok(())
+    }
+    fn set_wheel(
+        &mut self,
+        index: usize,
+        speed: f32,
+    ) -> Result<(), Self::Error> {
+        self.last[index] = speed;
+        Ok(())
+    }
 }
-/// Create a read transaction for the given I2C address and expected data.
-pub fn read(
-    addr: u8,
-    data: Vec<u8>,
-) -> I2cTrans {
-    I2cTrans::read(addr, data)
-}
-#[test]
-fn test_init_devices() {
-    // Define only the initialization-related transactions (IMU)
-    let expectations = [
-        write_read(IMU_ADDRESS, vec![0x75], vec![0x67]),
-        write_read(IMU_ADDRESS, vec![0x21], vec![0x00]),
-        write(IMU_ADDRESS, vec![0x21, 0x00]),
-        write_read(IMU_ADDRESS, vec![0x20], vec![0x00]),
-        write(IMU_ADDRESS, vec![0x20, 0x00]),
-        write_read(IMU_ADDRESS, vec![0x1F], vec![0x0F]),
-        write(IMU_ADDRESS, vec![0x1F, 0x0F]),
-    ];
 
-    let mock = I2cMock::new(&expectations);
-    let i2c_bus = RefCell::new(mock);
-    let mut devs = I2CDevices::new(&i2c_bus, 0.148, 0.195);
-    devs.init_devices().unwrap();
-    i2c_bus.borrow_mut().done();
+struct MockImu;
+impl Imu for MockImu {
+    type Error = ();
+    fn read(&mut self) -> Result<ImuData, Self::Error> { Ok(ImuData::default()) }
+}
+
+struct DummyLights;
+impl Lights for DummyLights {
+    type Error = ();
+    fn set_brightness(
+        &mut self,
+        _value: u8,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
 }
 
 #[test]
-fn test_configure_pwm() {
-    // Expected transactions for enabling PWM and setting prescale (includes sleep handling)
-    let expectations = [
-        write(PWM_ADDRESS, vec![0x00, 0x01]),
-        write(PWM_ADDRESS, vec![0x00, 0x11]),
-        write(PWM_ADDRESS, vec![0xFE, 100]),
-        write(PWM_ADDRESS, vec![0x00, 0x01]),
-    ];
-
-    let mock = I2cMock::new(&expectations);
-    let i2c_bus = RefCell::new(mock);
-    let mut devs = I2CDevices::new(&i2c_bus, 0.148, 0.195);
-    let pwm = Pca9685::new(RefCellDevice::new(&i2c_bus), PwmAddress::from(PWM_ADDRESS)).unwrap();
-    devs.pwm = Some(pwm);
-    devs.configure_pwm().unwrap();
-    i2c_bus.borrow_mut().done();
+fn test_controller_handles_zero_motion() {
+    let mut ctrl = SystemController::new(
+        MockPwm {
+            last: [1.0; 3],
+            enabled: false,
+        },
+        MockImu,
+        DummyLights,
+        0.148,
+        0.195,
+        7.0,
+    );
+    let _ = ctrl.handle_i2c(I2CCommand::T {
+        direction_deg: 0.0,
+        speed_norm: 0.0,
+    });
+    assert_eq!(ctrl.pwm.last, [0.0, 0.0, 0.0]);
 }
 
-#[test]
-fn test_apply_wheel_speeds_zero() {
-    // Zero speeds should issue one auto-increment and six channel writes
-    let expectations = [
-        write(PWM_ADDRESS, vec![0x00, 0x31]),
-        write(PWM_ADDRESS, vec![0x1E, 0x00, 0x00, 0x00, 0x00]),
-        write(PWM_ADDRESS, vec![0x22, 0x00, 0x00, 0x00, 0x00]),
-        write(PWM_ADDRESS, vec![0x0E, 0x00, 0x00, 0x00, 0x00]),
-        write(PWM_ADDRESS, vec![0x12, 0x00, 0x00, 0x00, 0x00]),
-        write(PWM_ADDRESS, vec![0x16, 0x00, 0x00, 0x00, 0x00]),
-        write(PWM_ADDRESS, vec![0x1A, 0x00, 0x00, 0x00, 0x00]),
-    ];
-
-    let mock = I2cMock::new(&expectations);
-    let i2c_bus = RefCell::new(mock);
-    let mut devs = I2CDevices::new(&i2c_bus, 0.148, 0.195);
-    let pwm = Pca9685::new(RefCellDevice::new(&i2c_bus), PwmAddress::from(PWM_ADDRESS)).unwrap();
-    devs.pwm = Some(pwm);
-    devs.apply_wheel_speeds(&[0.0, 0.0, 0.0]).unwrap();
-    i2c_bus.borrow_mut().done();
-}
-
-/// Smoke test for wheel kinematics via the controller helper.
 #[test]
 fn wheel_velocities_nonzero() {
-    let kin = owb_core::utils::math::kinematics::EmbodiedKinematics::new(0.148, 0.195);
+    let kin = EmbodiedKinematics::new(0.148, 0.195, 7.0);
     let wheels = kin.compute_wheel_velocities(1.0, 0.0, 0.0, 0.0);
     assert!(wheels.iter().any(|&v| v != 0.0));
 }
 
-/// Example: Embodied kinematics instantiation and wheel velocity computation.
 #[test]
 fn example_embodied_kinematics() {
-    let ek = EmbodiedKinematics::new(0.148, 0.195);
+    let ek = EmbodiedKinematics::new(0.148, 0.195, 7.0);
     let wheels = ek.compute_wheel_velocities(1.0, 0.0, 0.0, 0.0);
     assert!(wheels.iter().any(|&v| v != 0.0));
 }
 
-/// Example: instantiating WebSocket server types.
 #[test]
-fn example_websocket_types_exist() {
-    let _ws: WebSocket = WebSocket;
-    let _timer: ServerTimer = ServerTimer;
+fn yaw_command_spins_in_place() {
+    let mut ctrl = SystemController::new(
+        MockPwm {
+            last: [0.0; 3],
+            enabled: true,
+        },
+        MockImu,
+        DummyLights,
+        0.148,
+        0.195,
+        7.0,
+    );
+    let _ = ctrl.handle_i2c(I2CCommand::Y {
+        yaw_rate_deg_s: 45.0,
+        orientation_deg: Some(0.0),
+    });
+    assert!(ctrl.pwm.last.iter().all(|&v| v.abs() > 0.0));
+    let sign = ctrl.pwm.last[0].signum();
+    for &v in &ctrl.pwm.last {
+        assert_eq!(v.signum(), sign);
+        assert!(v.abs() <= 1.0 + 1e-6);
+    }
+    let rad = ctrl.embodied.wheel_norm_to_rad_s(ctrl.pwm.last);
+    assert!(rad.iter().all(|&v| v.abs() <= 7.0 + 1e-6));
+}
+
+#[test]
+fn disable_command_zeroes_wheels() {
+    let mut ctrl = SystemController::new(
+        MockPwm {
+            last: [0.5, -0.3, 0.1],
+            enabled: true,
+        },
+        MockImu,
+        DummyLights,
+        0.148,
+        0.195,
+        7.0,
+    );
+    let _ = ctrl.handle_i2c(I2CCommand::Disable);
+    assert_eq!(ctrl.pwm.last, [0.0, 0.0, 0.0]);
+    assert!(!ctrl.pwm.enabled);
+}
+
+#[test]
+fn omni_command_uses_reported_orientation() {
+    let mut ctrl = SystemController::new(
+        MockPwm {
+            last: [0.0; 3],
+            enabled: true,
+        },
+        MockImu,
+        DummyLights,
+        0.148,
+        0.195,
+        7.0,
+    );
+    let speed = 0.6;
+    let direction = 15.0;
+    let orientation = 22.0;
+    let yaw_rate = 45.0;
+    let _ = ctrl.handle_i2c(I2CCommand::O {
+        direction_deg: direction,
+        speed_norm: speed,
+        yaw_rate_deg_s: yaw_rate,
+        orientation_deg: Some(orientation),
+    });
+    let mut orientation_norm = orientation % 360.0;
+    if !orientation_norm.is_finite() {
+        orientation_norm = 0.0;
+    }
+    else if orientation_norm < 0.0 {
+        orientation_norm += 360.0;
+    }
+    let expected = ctrl.embodied.compute_wheel_velocities(
+        speed.clamp(-1.0, 1.0),
+        direction,
+        orientation_norm,
+        ctrl.embodied.normalize_yaw_rate_deg(yaw_rate),
+    );
+    for (actual, exp) in ctrl.pwm.last.iter().zip(expected.iter()) {
+        assert!((actual - exp).abs() < 1e-6);
+    }
 }

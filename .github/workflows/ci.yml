@@ -1,59 +1,211 @@
 name: CI
 
+# NOTE: ESP32-S3 firmware is built in the `firmware` job using the
+# espressif/idf-rust:all_1.95.0.0 container (~4 GB image pull, ~8-10 min total).
+# Host crates (owb-core, owb-msg, owb-host-sim, owb-ui) run on ubuntu-latest.
+
 on:
   push:
-    branches: [ main, master ]
+    branches: [main, 'code-review-*', 'feat/*', 'fix/*']
   pull_request:
-    branches: [ main, master ]
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+# ── Jobs run in parallel ─────────────────────────────────────────────────────
 
 jobs:
-  fmt:
-    name: Rustfmt Check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: rust-lang/setup-rust@v1
-        with:
-          rust-version: stable
-      - name: Install Rustfmt
-        run: rustup component add rustfmt
-      - name: Check formatting
-        run: cargo fmt --all -- --check
 
+  # ---------------------------------------------------------------------------
+  # check — cargo check across owb-core feature combinations + owb-host-sim,
+  #         followed by the full test suite for both crates.
+  # ---------------------------------------------------------------------------
+  check:
+    name: Check & Test (host crates)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+
+      - name: Cache cargo registry / git / target
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: ${{ hashFiles('**/Cargo.lock') }}
+
+      - name: cargo check — owb-core (default features)
+        run: cargo check -p owb-core
+
+      - name: cargo check — owb-core (serde only)
+        run: cargo check -p owb-core --features serde
+
+      - name: cargo check — owb-core (net + serde)
+        run: cargo check -p owb-core --features net,serde
+
+      - name: cargo check — owb-core (sim)
+        run: cargo check -p owb-core --features sim
+
+      - name: cargo check — owb-host-sim
+        run: cargo check -p owb-host-sim
+
+      - name: cargo test — owb-core (net + serde)
+        run: cargo test -p owb-core --features net,serde
+
+      - name: cargo test — owb-host-sim
+        run: cargo test -p owb-host-sim
+
+      - name: cargo check — owb-msg (serde)
+        run: cargo check -p owb-msg --features serde
+
+      - name: cargo test — owb-msg
+        run: cargo test -p owb-msg
+
+  # ---------------------------------------------------------------------------
+  # clippy — lint the host crates; -D warnings makes any advisory a hard failure.
+  # ---------------------------------------------------------------------------
   clippy:
-    name: Clippy Lint
+    name: Clippy (host crates)
     runs-on: ubuntu-latest
-    needs: fmt
-    steps:
-      - uses: actions/checkout@v4
-      - uses: rust-lang/setup-rust@v1
-        with:
-          rust-version: stable
-      - name: Install Clippy
-        run: rustup component add clippy
-      - name: Run Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
 
-  test:
-    name: Run Tests
-    runs-on: ubuntu-latest
-    needs: clippy
     steps:
-      - uses: actions/checkout@v4
-      - uses: rust-lang/setup-rust@v1
-        with:
-          rust-version: stable
-      - name: Run cargo tests
-        run: cargo test --workspace --locked --verbose
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-  publish_dry_run:
-    name: Dry-run Publish
-    runs-on: ubuntu-latest
-    needs: test
-    steps:
-      - uses: actions/checkout@v4
-      - uses: rust-lang/setup-rust@v1
+      - name: Install Rust (stable) + clippy
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
-          rust-version: stable
-      - name: Dry-run cargo publish
-        run: cargo publish --workspace --dry-run
+          components: clippy
+
+      - name: Cache cargo registry / git / target
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: ${{ hashFiles('**/Cargo.lock') }}
+
+      - name: cargo clippy — owb-core (net + serde)
+        run: cargo clippy -p owb-core --features net,serde -- -D warnings
+
+      - name: cargo clippy — owb-host-sim
+        run: cargo clippy -p owb-host-sim -- -D warnings
+
+      - name: cargo clippy — owb-msg
+        run: cargo clippy -p owb-msg --features serde -- -D warnings
+
+  # ---------------------------------------------------------------------------
+  # ui — type-check the Leptos WASM PWA.
+  #      trunk build is intentionally skipped (heavy install); cargo check
+  #      against the wasm32 target is sufficient to catch type errors in CI.
+  # ---------------------------------------------------------------------------
+  ui:
+    name: UI type-check (wasm32)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry / git / target
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: ${{ hashFiles('**/Cargo.lock') }}
+
+      - name: cargo check — owb-ui (wasm32)
+        run: cargo check --target wasm32-unknown-unknown -p owb-ui
+
+  # ---------------------------------------------------------------------------
+  # audit — security advisory scan.  Baseline established 2026-06-24:
+  #         three warnings (paste unmaintained, proc-macro-error2 unmaintained,
+  #         embassy-usb-driver yanked), zero vulnerabilities.  Hard-fail on
+  #         any new vulnerability advisory; warnings are allowed.
+  #         `checks: write` is required so the action can post per-advisory
+  #         check runs to the PR.
+  # ---------------------------------------------------------------------------
+  audit:
+    name: Security audit (cargo-audit)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  # ---------------------------------------------------------------------------
+  # firmware — cross-compile owb-esp for xtensa-esp32s3-none-elf using the
+  #             Espressif idf-rust Docker image. Runs inside the container so
+  #             no self-hosted runner is needed. Image pull is ~4 GB; total
+  #             job time ~8-10 min. Catches link-time DRAM overflow and
+  #             Xtensa-specific compile errors on every PR.
+  # ---------------------------------------------------------------------------
+  firmware:
+    name: Firmware build (ESP32-S3 Xtensa)
+    runs-on: ubuntu-latest
+    container:
+      image: espressif/idf-rust:all_1.95.0.0
+      # Run as root so the actions/checkout post-job step can write to the
+      # runner's /__w/_temp/ directory (owned by the host runner UID, not
+      # the container's `esp` user).  CARGO_HOME / RUSTUP_HOME redirect
+      # cargo and rustup back to the esp user's pre-installed toolchain.
+      options: --user root
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Build owb-esp (v1-alpha no-camera)
+        working-directory: owb-bin/owb-esp
+        env:
+          CARGO_TARGET_DIR: /tmp/esp-target
+          CARGO_HOME: /home/esp/.cargo
+          RUSTUP_HOME: /home/esp/.rustup
+          # HOME must match the esp user's directory so export-esp.sh adds
+          # /home/esp/.cargo/bin to PATH instead of /root/.cargo/bin.
+          HOME: /home/esp
+        run: |
+          . /home/esp/export-esp.sh
+          rustup run esp cargo build \
+            --target xtensa-esp32s3-none-elf \
+            --bin owb-esp \
+            --no-default-features \
+            --features esp32s3,real-executors,no-camera \
+            --ignore-rust-version
+
+  # ---------------------------------------------------------------------------
+  # fmt — rustfmt.toml uses nightly-only options (imports_indent,
+  #       imports_granularity, fn_params_layout, etc.). Running stable rustfmt
+  #       against this config produces misleading diffs, so we install nightly +
+  #       rustfmt. The nightly is PINNED: rustfmt behavior (esp. brace/comment
+  #       handling) drifts between nightlies, and an unpinned `@nightly` silently
+  #       reformatted the whole tree and turned this job red. Bump deliberately.
+  # ---------------------------------------------------------------------------
+  fmt:
+    name: Format check (nightly rustfmt)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install nightly Rust + rustfmt (pinned)
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
+        with:
+          toolchain: nightly-2026-06-20
+          components: rustfmt
+
+      - name: Cache cargo registry / git / target
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: nightly-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: cargo fmt --check (pinned nightly)
+        run: cargo +nightly-2026-06-20 fmt --all -- --check

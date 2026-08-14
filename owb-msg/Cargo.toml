@@ -1,0 +1,16 @@
+[package]
+name = "owb-msg"
+version = "0.1.0"
+edition = "2021"
+description = "OWB shared wire-protocol types (no_std, wasm-compatible)"
+license = "MIT OR Apache-2.0"
+
+[features]
+default = ["serde"]
+serde = ["dep:serde"]
+
+[dependencies]
+serde = { version = "1", default-features = false, features = ["derive", "alloc"], optional = true }
+
+[dev-dependencies]
+serde_json = "1"

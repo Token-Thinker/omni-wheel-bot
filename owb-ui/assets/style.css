@@ -1,0 +1,480 @@
+/* Monochrome cool palette: greyish-blue/teal. Dark-first.
+   Both themes intentionally low chroma — accent is the only colored hue. */
+:root {
+  --accent: #5fb3ba;
+  --accent-soft: rgba(95, 179, 186, 0.18);
+  --danger: #d97961;
+}
+
+[data-theme="dark"] {
+  --bg: #0d1117;
+  --bg-elev: #131820;
+  --bg-card: #181f28;
+  --fg: #cfd8e0;
+  --fg-muted: #7d8a99;
+  --border: #232c36;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+}
+
+[data-theme="light"] {
+  --bg: #eef2f5;
+  --bg-elev: #e3e8ed;
+  --bg-card: #f5f7f9;
+  --fg: #1d262e;
+  --fg-muted: #5e6b78;
+  --border: #c6cdd4;
+  --shadow: 0 1px 2px rgba(13, 17, 23, 0.06);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+    Arial, sans-serif;
+  font-size: 15px;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  touch-action: none;
+}
+
+/* ---------- top strip ---------- */
+/* Sits above the joystick area, ambient. Tiny battery + connection state on
+   the left, settings gear on the right. Floats above the touch area so it
+   never gets in the way of joystick spawn. */
+.strip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 0.9rem;
+  z-index: 5;
+  pointer-events: none; /* let touches fall through to joystick-area */
+}
+
+.strip-cluster {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  pointer-events: auto;
+}
+
+.indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.indicator-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fg-muted);
+  transition: background 200ms ease, box-shadow 200ms ease;
+}
+
+.indicator[data-state="open"] .indicator-dot {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.indicator[data-state="closed"] .indicator-dot,
+.indicator[data-state="error"] .indicator-dot {
+  background: var(--danger);
+}
+.indicator[data-state="connecting"] .indicator-dot {
+  background: var(--fg-muted);
+  opacity: 0.6;
+}
+.indicator[data-state="auth-error"] .indicator-dot {
+  background: var(--danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 25%, transparent);
+}
+
+.indicator-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--danger);
+  /* Hidden when empty so the indicator doesn't grow an invisible gap. */
+  display: none;
+}
+.indicator-label:not(:empty) {
+  display: inline;
+}
+
+.ambient {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.78rem;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+.icon-btn {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: var(--fg-muted);
+  padding: 0.4rem;
+  border-radius: 0.5rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 150ms ease, background 150ms ease;
+}
+.icon-btn:hover,
+.icon-btn:focus-visible {
+  color: var(--fg);
+  background: var(--bg-elev);
+  outline: none;
+}
+.icon-btn svg {
+  width: 22px;
+  height: 22px;
+  display: block;
+}
+
+/* ---------- joystick area ---------- */
+/* The entire body is the touch area; the visual joystick is hidden until the
+   operator touches the screen, then spawns centered on the touch point. */
+.joystick-area {
+  position: absolute;
+  inset: 0;
+  background: var(--bg);
+  touch-action: none;
+}
+
+/* Subtle hint, fades out once the operator first touches the screen. */
+.joystick-hint {
+  position: absolute;
+  bottom: 1.6rem;
+  left: 50%;
+  transform: translateX(-50%);
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+  opacity: 0.55;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+  transition: opacity 200ms ease;
+}
+body[data-stick="active"] .joystick-hint,
+body[data-stick-touched="1"] .joystick-hint {
+  opacity: 0;
+}
+
+/* Visual joystick: two concentric rings, knob follows finger.
+   Restoring the old design: inner ring as a small spawn marker, outer ring
+   as the full-speed boundary. The knob can travel from center out to the
+   outer ring; speed_norm = distance / outer-ring-radius, clamped 0-1.
+   The outer ring is sized ~2x the previous (~280px diameter vs ~140px) so
+   the operator gets a longer travel for low-speed work before max. */
+.joystick {
+  position: absolute;
+  width: min(78vw, 64vh);
+  height: min(78vw, 64vh);
+  max-width: 360px;
+  max-height: 360px;
+  touch-action: none;
+  visibility: hidden;
+  opacity: 0;
+  transform: translate(-50%, -50%);
+  transition: opacity 90ms ease-out;
+  pointer-events: none;
+}
+body[data-stick="active"] .joystick {
+  visibility: visible;
+  opacity: 1;
+}
+
+/* Outer "ring" is the invisible touch boundary; no visible chrome. The
+   joystick reads like a console analog stick — only the thumb cap shows. */
+.joystick-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+}
+
+/* Thumb cap: a single visible disc that follows the finger. Sized like a
+   real-world thumb (~65px at the max joystick footprint, scales down with
+   smaller phones). `joystick.ts` writes the transform directly. */
+.joystick-knob {
+  position: absolute;
+  width: 20%;
+  height: 20%;
+  left: 40%;
+  top: 40%;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.92;
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.32),
+    inset 0 1px 2px rgba(255, 255, 255, 0.18),
+    inset 0 -2px 4px rgba(0, 0, 0, 0.25);
+  transition: transform 60ms linear;
+  will-change: transform;
+}
+body[data-stick="active"] .joystick-knob {
+  transition: none;
+}
+
+/* Readout floats ABOVE the outer ring as a small pill bubble. Sits outside
+   the ring so it never disappears under the finger; styled as a chip so it
+   reads as an ambient HUD element rather than chrome. */
+.joystick-readout {
+  position: absolute;
+  bottom: calc(100% + 0.4rem);
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.78rem;
+  color: var(--fg);
+  background: rgba(13, 17, 23, 0.72);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+[data-theme="light"] .joystick-readout {
+  background: rgba(245, 247, 249, 0.78);
+}
+.readout-sep {
+  opacity: 0.4;
+}
+
+/* ---------- settings drawer ---------- */
+.drawer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: min(86vw, 360px);
+  height: 100vh;
+  background: var(--bg-elev);
+  border-left: 1px solid var(--border);
+  /* shadow only when open — prevents a shadow sliver from peeking at the
+     right edge while the drawer is translated off-screen */
+  box-shadow: none;
+  transform: translateX(100%);
+  transition: transform 220ms ease, box-shadow 220ms ease;
+  z-index: 20;
+  overflow-y: auto;
+  padding-bottom: 2rem;
+}
+.drawer[data-open="1"] {
+  transform: translateX(0);
+  box-shadow: -4px 0 16px rgba(0, 0, 0, 0.35);
+}
+
+.drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.7rem 1rem;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--bg-elev);
+}
+
+.drawer-title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--fg);
+}
+
+.drawer-section {
+  padding: 0.9rem 1rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+}
+.drawer-section:last-of-type {
+  border-bottom: none;
+}
+
+.drawer-h {
+  margin: 0 0 0.6rem;
+  font-size: 0.72rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-muted);
+}
+
+.select,
+.btn {
+  appearance: none;
+  width: 100%;
+  background: var(--bg-card);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.7rem;
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease;
+}
+.select:focus,
+.btn:hover,
+.btn:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+  outline: none;
+}
+
+.slider-row {
+  display: grid;
+  grid-template-columns: 2.2rem 1fr 2.6rem;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.35rem 0;
+  font-size: 0.85rem;
+}
+.slider-row.card-disabled {
+  opacity: 0.5;
+}
+.slider-row .lbl {
+  color: var(--fg-muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.slider-row .val {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+}
+
+.slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 4px;
+  background: var(--border);
+  border-radius: 999px;
+  outline: none;
+}
+.slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+}
+.slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: none;
+  cursor: pointer;
+}
+
+.toggle {
+  width: 36px;
+  height: 20px;
+  appearance: none;
+  background: var(--border);
+  border-radius: 999px;
+  position: relative;
+  cursor: pointer;
+  transition: background 150ms ease;
+}
+.toggle::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--bg-card);
+  transition: transform 150ms ease;
+}
+.toggle:checked {
+  background: var(--accent);
+}
+.toggle:checked::after {
+  transform: translateX(16px);
+}
+
+/* Read-only Controls tooltip section in the drawer. Non-interactive — just
+   a reference card so the operator knows what gestures the UI accepts. */
+.drawer-tooltip {
+  user-select: text;
+  cursor: default;
+}
+.tip-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+.tip-list li {
+  font-size: 0.82rem;
+  line-height: 1.4;
+  color: var(--fg-muted);
+  padding-left: 0.7rem;
+  border-left: 2px solid var(--border);
+}
+.tip-list li strong {
+  color: var(--fg);
+  font-weight: 500;
+}
+
+/* Behind the drawer; tap to close.
+   Using <button> so iOS Safari fires tap events (plain <div> is non-tappable
+   on iOS without cursor:pointer). Reset button appearance fully. */
+.drawer-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.42);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 220ms ease, visibility 220ms;
+  z-index: 15;
+  cursor: pointer;
+  /* reset <button> defaults */
+  border: none;
+  padding: 0;
+  margin: 0;
+  border-radius: 0;
+  appearance: none;
+  -webkit-appearance: none;
+}
+.drawer-backdrop[data-open="1"] {
+  opacity: 1;
+  visibility: visible;
+}

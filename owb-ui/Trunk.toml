@@ -1,0 +1,32 @@
+[build]
+target = "index.html"
+dist = "dist"
+# dist/ output gets embedded in owb-esp firmware via include_bytes! in
+# ui_assets.rs.  The post-build hook below renames content-hashed outputs to
+# fixed, predictable names so include_bytes! paths are stable across builds.
+
+# Trunk emits:  owb_ui_bg-<hash>.wasm  →  app.wasm
+#               owb_ui-<hash>.js       →  app.js
+#               style-<hash>.css       →  style.css   (data-trunk rel="css" adds a hash)
+# Also patches index.html to reference the new names.
+[[hooks]]
+stage = "post_build"
+command = "bash"
+command_arguments = [
+  "-c",
+  '''
+set -e
+DIST="$TRUNK_STAGING_DIR"
+# wasm-bindgen always places _bg before .wasm regardless of trunk version.
+WASM=$(ls "$DIST"/*_bg*.wasm 2>/dev/null | head -1)
+[ -n "$WASM" ] && mv "$WASM" "$DIST/app.wasm" && echo "trunk-hook: $(basename $WASM) -> app.wasm"
+# JS glue file is named after the crate (owb-ui or owb_ui depending on trunk version).
+JS=$(ls "$DIST"/owb*.js 2>/dev/null | head -1)
+[ -n "$JS" ] && mv "$JS" "$DIST/app.js" && echo "trunk-hook: $(basename $JS) -> app.js"
+CSS=$(ls "$DIST"/style-*.css 2>/dev/null | head -1)
+[ -n "$CSS" ] && mv "$CSS" "$DIST/style.css" && echo "trunk-hook: $(basename $CSS) -> style.css"
+sed -i 's|[^/"]*_bg[^"]*\.wasm|app.wasm|g' "$DIST/index.html"
+sed -i 's|owb[^/"]*\.js|app.js|g' "$DIST/index.html"
+sed -i 's|style-[^.]*\.css|style.css|g' "$DIST/index.html"
+'''
+]
