@@ -1,4 +1,4 @@
-[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/Token-Thinker/omni-wheel-bot-pro/badge)](https://securityscorecards.dev/viewer/?uri=github.com/Token-Thinker/omni-wheel-bot-pro)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/Token-Thinker/omni-wheel-bot/badge)](https://securityscorecards.dev/viewer/?uri=github.com/Token-Thinker/omni-wheel-bot)
 ![crates.io](https://img.shields.io/crates/v/owb-core.svg) ![docs.rs](https://docs.rs/owb-core/badge.svg) ![license](https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue.svg)
 
 # Omni‑Wheel Bot Workspace
