@@ -33,7 +33,7 @@ jobs:
           results_format: sarif
           # publish_results requires a PUBLIC repo to post to api.securityscorecards.dev.
           # Set to true and re-enable the SARIF upload step once the repo is public.
-          publish_results: false
+          publish_results: true
 
       # Uncomment when the repo is made public (SARIF upload needs GitHub Advanced Security).
       # - name: Upload SARIF to GitHub Security tab
