@@ -15,7 +15,6 @@ description = "Core drivers and utilities for the Omni-Wheel Bot (no-std embedde
 authors     = ["Omni-Wheel Bot Contributors"]
 src         = "docs"
 language    = "en"
-multilingual = false
 
 [build]
 build-dir       = "target/book"
