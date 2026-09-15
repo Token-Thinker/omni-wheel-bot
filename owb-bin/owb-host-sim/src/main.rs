@@ -1,3 +1,4 @@
+mod hil_bridge;
 mod sim_engine;
 mod sim_routes;
 
@@ -31,7 +32,7 @@ use tokio::{signal, sync::Mutex, time::MissedTickBehavior};
 use tower_http::services::ServeDir;
 use tracing::{error, info, warn};
 
-use crate::{sim_engine::SimEngine, sim_routes::SimContext};
+use crate::{hil_bridge::HilBridge, sim_engine::SimEngine, sim_routes::SimContext};
 
 const TELEMETRY_INTERVAL: Duration = Duration::from_millis(500);
 const SIM_TICK_INTERVAL: Duration = Duration::from_millis(20); // 50 Hz
@@ -41,6 +42,9 @@ struct AppState {
     controller: Mutex<Controller>,
     context: sim::Context,
     sim: Arc<SimContext>,
+    /// Optional hardware-in-the-loop bridge. When `OWB_HIL_SERIAL` is set,
+    /// every command is mirrored to the real robot over USB serial.
+    hil: Option<HilBridge>,
 }
 
 /// Boot the development server used to exercise `owb-core` on a host machine.
@@ -77,10 +81,34 @@ async fn main() {
         });
     }
 
+    // Optional HIL bridge: if OWB_HIL_SERIAL points at a serial device, mirror
+    // every command to the physical robot over USB. Absent/failed → sim-only.
+    let hil = HilBridge::from_env();
+    if hil.is_none() {
+        info!("HIL bridge disabled (set OWB_HIL_SERIAL=/dev/ttyACM0 to drive a real robot)");
+    }
+
+    // Advance the legacy telemetry context from ONE global task. This used to
+    // live in the per-connection telemetry ticker, which made the simulated
+    // clock run at N x realtime with N connected browser tabs — two tabs and
+    // the battery drained twice as fast as the wall clock.
+    {
+        let context = bundle.context.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(TELEMETRY_INTERVAL);
+            ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+            loop {
+                ticker.tick().await;
+                context.advance(TELEMETRY_INTERVAL);
+            }
+        });
+    }
+
     let state = Arc::new(AppState {
         controller: Mutex::new(bundle.controller),
         context: bundle.context,
         sim: sim_ctx.clone(),
+        hil,
     });
     // Determine the path to owb-ui/dist/ for ServeDir.
     // When running via `cargo run` from the workspace root, the cwd is the
@@ -120,7 +148,9 @@ async fn main() {
         // Serve PWA static assets (app.wasm, app.js, style.css, manifest.json,
         // icons/) directly from owb-ui/dist/ on disk.  This avoids embedding
         // the WASM binary in the host-sim binary and keeps the dev loop fast.
-        .nest_service("/", ServeDir::new(&dist_path));
+        // Used as a fallback (not `nest_service("/")`, which conflicts with the
+        // explicit routes above) so the static tree serves any unmatched path.
+        .fallback_service(ServeDir::new(&dist_path));
 
     let bind = std::env::var("OWB_BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:3000".to_string());
     let addr: SocketAddr = bind
@@ -1047,7 +1077,8 @@ async fn handle_socket(
                 }
             }
             _ = ticker.tick() => {
-                state.context.advance(TELEMETRY_INTERVAL);
+                // Read-only: the shared sim clock is advanced by the single
+                // global task in `main`, not once per connected client.
                 if let Err(e) = send_telemetry(&state, &mut sender).await {
                     warn!("telemetry send failed: {e}");
                     break;
@@ -1072,6 +1103,18 @@ async fn send_telemetry(
     let payload = serde_json::json!({
         "type": "telemetry",
         "frame": frame,
+        // Report HIL liveness, not merely "configured". The serial writer has no
+        // reconnect path, so a bridge that died mid-session keeps accepting
+        // commands that never reach the robot — the operator has to be able to
+        // tell "mirroring to hardware" from "silently sim-only".
+        "hil": state.hil.as_ref().map(|hil| {
+            if hil.is_healthy() {
+                "live"
+            }
+            else {
+                "dead"
+            }
+        }),
     });
     send_json_payload(sender, payload, ReplyFormat::Text).await
 }
@@ -1259,6 +1302,11 @@ async fn execute_command(
     // Mirror first so even commands that legacy `apply_command` ignores
     // (e.g. WheelTrim) still drive the simulator.
     sim_routes::mirror_command(&state.sim, &cmd).await;
+    // Mirror to the physical robot over USB when the HIL bridge is active.
+    // Byte-identical to a WS frame, so the firmware parses it the same way.
+    if let Some(hil) = &state.hil {
+        hil.forward(&cmd);
+    }
     let mut controller = state.controller.lock().await;
     sim::apply_command(&mut controller, cmd)
 }
