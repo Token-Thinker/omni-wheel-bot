@@ -3,6 +3,16 @@ name = "owb-host-sim"
 version = "0.1.0"
 edition = "2021"
 
+# Bring-up assertion harness. A separate binary so the check tool does not
+# drag in the sim server's axum/tower stack at runtime.
+[[bin]]
+name = "hil-check"
+path = "src/bin/hil_check.rs"
+
+[[bin]]
+name = "owb-host-sim"
+path = "src/main.rs"
+
 [dependencies]
 owb-core = { path = "../../owb-core", features = ["serde", "sim"] }
 # owb-ui is WASM-only; the host-sim serves dist/ from disk via tower-http
