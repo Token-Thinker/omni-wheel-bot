@@ -5,7 +5,7 @@ use esp_hal::{
     Blocking,
 };
 #[cfg(feature = "real-executors")]
-use log::{info, warn};
+use log::{debug, info, warn};
 #[cfg(feature = "real-executors")]
 use owb_core::{
     ctrl::{
@@ -242,6 +242,12 @@ impl OnboardLis2dh12Imu {
 
     pub(super) fn read(&mut self) -> ImuData {
         if !self.enabled {
+            // Every other failure path here warns, so a zeroed reading used to
+            // be indistinguishable from a dead sensor. Note the coupling: the
+            // motor `Disable` command also disables the IMU, so a plain
+            // `read_imu` after `disable` legitimately reports all zeros with
+            // `tilt: null`.
+            debug!("board imu: read while disabled; reporting zeros");
             return ImuData::default();
         }
 
