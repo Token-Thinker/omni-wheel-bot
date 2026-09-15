@@ -70,6 +70,8 @@ pub struct RealBoardRuntime {
     heading_hold_kp: f32,
     heading_hold_correction: f32,
     heading_hold_baseline_raw: [i16; 3],
+    /// Timestamp of the last *active* straightness tick, for dt normalisation.
+    heading_hold_last_ms: u32,
     pid_probe_targets: Option<[f32; 3]>,
     sleep: Option<Output<'static>>,
     status_led: Option<GpioStatusLed>,
@@ -240,10 +242,11 @@ impl RealBoardRuntime {
             drive_mode: profile.drive_mode,
             active_wheels: profile.active_wheels,
             motor_pins: profile.motor,
-            kinematics: ek::new(
+            kinematics: ek::new_with_angles(
                 drive.wheel_radius_m,
                 drive.robot_radius_m,
                 drive.max_wheel_rad_s,
+                drive.wheel_angles_deg,
             ),
             pid: TriWheelPidController::new(
                 drive.counts_per_wheel_revolution as f32,
@@ -273,6 +276,7 @@ impl RealBoardRuntime {
             heading_hold_kp: 0.0,
             heading_hold_correction: 0.0,
             heading_hold_baseline_raw: [0; 3],
+            heading_hold_last_ms: 0,
             pid_probe_targets: None,
             sleep,
             status_led: profile
@@ -326,6 +330,12 @@ impl RealBoardRuntime {
 
     fn two_wheel_front_targets(&mut self) -> [f32; 3] {
         let yaw_norm = (self.last_yaw_rate_deg_s / ALPHA_TWO_WHEEL_FULL_YAW_DEG_S).clamp(-1.0, 1.0);
+        // `convert_to_body_frame` returns `(strafe, forward)`, so the forward
+        // component is `.1` -- discarding `.0` here is deliberate, not a typo.
+        // Two-wheel front drive has no strafe authority, so the lateral part of
+        // the command is simply unavailable on this chassis. If that tuple order
+        // ever changes, this becomes a silent zero-throttle bug; the kinematics
+        // test `body_frame_puts_forward_in_second_element` pins it.
         let (_, forward_raw) = ek::convert_to_body_frame(
             self.last_speed_norm,
             self.last_direction_deg,
@@ -995,6 +1005,7 @@ impl RealBoardRuntime {
             .as_ref()
             .map(super::PcntEncoderCapture::raw_counts)
             .unwrap_or([0; 3]);
+        self.heading_hold_last_ms = Self::now_ms();
         info!(
             "real runtime {:?}: heading_hold enabled={} kp={:.4}",
             self.runtime, self.heading_hold_enabled, self.heading_hold_kp
@@ -1007,23 +1018,29 @@ impl RealBoardRuntime {
     /// Uses non-destructive `raw_counts` so the script-facing `read_encoders`
     /// command still sees the cumulative delta.
     fn apply_heading_hold_correction(&mut self) {
+        let forward_active = self.last_speed_norm.abs() > self.drive.motor_deadband_norm
+            && self.last_yaw_rate_deg_s.abs() < 1.0;
         if !self.heading_hold_enabled
             || self.drive_mode != DriveControlMode::TwoWheelFront
             || !self.enabled
+            || !forward_active
         {
-            self.heading_hold_correction = 0.0;
-            return;
-        }
-        let forward_active = self.last_speed_norm.abs() > self.drive.motor_deadband_norm
-            && self.last_yaw_rate_deg_s.abs() < 1.0;
-        if !forward_active {
-            self.heading_hold_correction = 0.0;
+            // Rebase, don't just zero the correction: the tracker must not
+            // carry counts accumulated while idle or spinning into the first
+            // tick after forward drive resumes.
+            self.reset_heading_hold_tracking();
             return;
         }
         let current_raw = match self.encoders.as_ref() {
             Some(enc) => enc.raw_counts(),
-            None => return,
+            None => {
+                self.reset_heading_hold_tracking();
+                return;
+            }
         };
+        let now_ms = Self::now_ms();
+        let elapsed_ms = now_ms.wrapping_sub(self.heading_hold_last_ms);
+        self.heading_hold_last_ms = now_ms;
         // Wrapping subtract → signed delta since last tick. Does NOT consume the encoder state.
         let mut delta = [0i32; 3];
         for i in 0..3 {
@@ -1032,12 +1049,32 @@ impl RealBoardRuntime {
         self.heading_hold_baseline_raw = current_raw;
         let imbalance = (delta[0].abs() - delta[1].abs()) as f32;
         let cprev = self.drive.counts_per_wheel_revolution as f32;
-        let norm_imbalance = imbalance / cprev.max(1.0);
+        // Scale the tick's raw count imbalance to the *nominal* control period.
+        // Without this, a late tick reports a larger imbalance purely because
+        // more time elapsed, and `kp` silently means something different at
+        // every scheduling hiccup. Referencing the nominal period (rather than
+        // converting to counts/second) keeps `kp` numerically identical to the
+        // value tuned on hardware; the clamp bounds the correction a very long
+        // or very short tick can request.
+        let nominal_ms = self.drive.control_dt_ms.max(1) as f32;
+        let dt_scale = (nominal_ms / (elapsed_ms as f32).max(1.0)).clamp(0.25, 4.0);
+        let norm_imbalance = dt_scale * imbalance / cprev.max(1.0);
         let new_corr = self.heading_hold_kp * norm_imbalance;
         self.heading_hold_correction = 0.6 * self.heading_hold_correction + 0.4 * new_corr;
         let bias = self.heading_hold_correction.clamp(-0.5, 0.5);
         self.last_drive_targets[0] = (self.last_drive_targets[0] - bias).clamp(-1.0, 1.0);
         self.last_drive_targets[1] = (self.last_drive_targets[1] + bias).clamp(-1.0, 1.0);
+    }
+
+    /// Drop the straightness correction and rebase the tracker on the current
+    /// counter values, so the next active tick measures exactly one tick of
+    /// imbalance regardless of how long the tracker sat inactive.
+    fn reset_heading_hold_tracking(&mut self) {
+        self.heading_hold_correction = 0.0;
+        if let Some(enc) = self.encoders.as_ref() {
+            self.heading_hold_baseline_raw = enc.raw_counts();
+        }
+        self.heading_hold_last_ms = Self::now_ms();
     }
 
     pub(super) fn read_encoder_snapshot(&mut self) -> EncoderData {

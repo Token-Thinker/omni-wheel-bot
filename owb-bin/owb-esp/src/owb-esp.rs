@@ -36,10 +36,11 @@ use esp_radio::{
     },
 };
 use log::LevelFilter;
-use owb_core::{
-    ext::prelude::*,
-    platform::{BoardRuntimeKind, CpuTopology},
-};
+// `BoardRuntimeKind` is only referenced by the shadow runtime, which is
+// compiled out when the real GPIO executors are enabled.
+#[cfg(not(feature = "real-executors"))]
+use owb_core::platform::BoardRuntimeKind;
+use owb_core::{ext::prelude::*, platform::CpuTopology};
 
 type Bus<'d> = I2c<'d, Blocking>;
 #[cfg(target_arch = "xtensa")]
@@ -72,9 +73,10 @@ const DRAM2_HEAP_BYTES: usize = 70 * 1024;
 static mut DRAM2_HEAP_MEM: core::mem::MaybeUninit<[u8; DRAM2_HEAP_BYTES]> =
     core::mem::MaybeUninit::uninit();
 
-#[cfg(feature = "real-executors")]
-const HEAP_BYTES: usize = 100 * 1024;
-#[cfg(not(feature = "real-executors"))]
+/// DRAM1 heap. Both `real-executors` and the stub build used to declare this
+/// separately under opposing `#[cfg]`s with the identical value, which read as
+/// if the two builds were deliberately tuned apart. They are not -- the DRAM1
+/// budget above is a property of the linker layout, not of the executor choice.
 const HEAP_BYTES: usize = 100 * 1024;
 const HIL_LOW_MODE_BUILD: bool = option_env!("OWB_HIL_LOW_MODE").is_some();
 const OWB_LOG_LEVEL: &str = match option_env!("OWB_LOG_LEVEL") {
@@ -156,22 +158,24 @@ fn attach_board_runtime(
 ) {
     // Spawn failures are surfaced as panics (I-05): a missing board runtime
     // means the command bus executor is absent and motion commands are lost.
+    //
+    // No `return` after the real-executors arm: the shadow `match` below is
+    // `#[cfg]`-ed out in that configuration, so there is nothing to fall into.
     #[cfg(feature = "real-executors")]
-    {
-        real_runtime_task(profile, _capabilities)
-            .map(|t| spawner.spawn(t))
-            .expect("critical: real_runtime_task spawn failed");
-        return;
-    }
+    real_runtime_task(profile, _capabilities)
+        .map(|t| spawner.spawn(t))
+        .expect("critical: real_runtime_task spawn failed");
 
+    // All four board runtimes take the identical shadow path — they were
+    // previously two arms with byte-identical bodies. Kept enumerated rather
+    // than collapsed to `_` so that adding a `BoardRuntimeKind` is a compile
+    // error here instead of silently landing in the `unreachable!` arm.
     #[cfg(not(feature = "real-executors"))]
     match profile.runtime {
-        BoardRuntimeKind::CameraOnly | BoardRuntimeKind::DevKitReference => {
-            shadow_runtime_task(profile.runtime)
-                .map(|t| spawner.spawn(t))
-                .expect("critical: shadow_runtime_task spawn failed");
-        }
-        BoardRuntimeKind::OwbS3V1 | BoardRuntimeKind::OwbS3V2 => {
+        BoardRuntimeKind::CameraOnly
+        | BoardRuntimeKind::DevKitReference
+        | BoardRuntimeKind::OwbS3V1
+        | BoardRuntimeKind::OwbS3V2 => {
             shadow_runtime_task(profile.runtime)
                 .map(|t| spawner.spawn(t))
                 .expect("critical: shadow_runtime_task spawn failed");
@@ -277,31 +281,51 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
             esp_alloc::MemoryCapability::Internal.into(),
         ));
     }
+
+    // External PSRAM (ESP32-S3-WROOM-2 octal SPI) as an additional heap region.
+    // Unlocks large allocations that don't fit in internal SRAM — e.g. a
+    // higher-resolution camera frame buffer (the internal DMA capture buffer is
+    // capped at ~40 KB = one 160x120 YUV422 frame). The macro both initializes
+    // PSRAM and registers it with esp-alloc as an External-capability region.
+    //
+    // Must be built in release mode (the workspace esp32s3 alias uses --release).
+    // Degrades safely: if no PSRAM chip responds, init returns a 0-length range
+    // and the region is simply empty — boot continues on internal RAM.
+    //
+    // WARNING: atomics are unreliable in S3 PSRAM, so nothing here must place an
+    // `Atomic*` in an External allocation (plain byte/frame buffers are fine).
+    #[cfg(target_arch = "xtensa")]
+    {
+        esp_alloc::psram_allocator!(
+            peripherals.PSRAM,
+            esp_hal::psram,
+            esp_hal::psram::PsramConfig {
+                mode: esp_hal::psram::PsramMode::OctalSpi,
+                ..core::default::Default::default()
+            }
+        );
+        esp_println::println!(
+            "[PSRAM] external heap registered (octal SPI); {}",
+            esp_alloc::HEAP.stats()
+        );
+    }
+
     let profile = profile::select_profile();
 
+    // Xtensa and RISC-V start the scheduler identically: esp-rtos 0.3 requires a
+    // SoftwareInterrupt<0> for context switches on *every* arch, where older
+    // versions took only the timer on Xtensa. These were two byte-identical
+    // `#[cfg]` blocks, which implied a per-arch difference that no longer
+    // exists; one block gated on both arches states the actual requirement.
+    #[cfg(any(target_arch = "xtensa", target_arch = "riscv32"))]
     {
-        #[cfg(target_arch = "xtensa")]
-        {
-            use esp_hal::{
-                interrupt::software::SoftwareInterruptControl,
-                timer::systimer::SystemTimer,
-            };
-            let systimer = SystemTimer::new(peripherals.SYSTIMER);
-            // esp-rtos 0.3 requires a SoftwareInterrupt<0> for context switches on
-            // every arch (previously Xtensa took only the timer).
-            let software = SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
-            esp_rtos::start(systimer.alarm0, software.software_interrupt0);
-        }
-        #[cfg(target_arch = "riscv32")]
-        {
-            use esp_hal::{
-                interrupt::software::SoftwareInterruptControl,
-                timer::systimer::SystemTimer,
-            };
-            let systimer = SystemTimer::new(peripherals.SYSTIMER);
-            let software = SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
-            esp_rtos::start(systimer.alarm0, software.software_interrupt0);
-        }
+        use esp_hal::{
+            interrupt::software::SoftwareInterruptControl,
+            timer::systimer::SystemTimer,
+        };
+        let systimer = SystemTimer::new(peripherals.SYSTIMER);
+        let software = SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
+        esp_rtos::start(systimer.alarm0, software.software_interrupt0);
     }
 
     // ── Hardware watchdog (RWDT) ────────────────────────────────────────────
@@ -376,6 +400,17 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
         }
         let mut capabilities = board::boot_probe(&mut i2c, profile);
         capabilities.has_camera = app_has_camera;
+
+        // Hand I2C0 over explicitly before any board runtime can claim it.
+        // The board sensors re-`steal()` I2C0 and reconfigure SDA/SCL on every
+        // access; on the dual-core path the control core does that as soon as
+        // `start_second_core` returns. Letting this handle live to the end of
+        // the block instead would (a) leave both cores able to drive the bus
+        // concurrently for the rest of boot, and (b) run *this* handle's `Drop`
+        // — tearing the peripheral down — after the control core had already
+        // taken it over. Boot probing is finished here, so release it now.
+        drop(i2c);
+
         #[cfg(target_arch = "xtensa")]
         let board_runtime_attached =
             maybe_start_dual_core_board_runtime(dual_core_cpu_ctrl, profile, capabilities);
@@ -560,6 +595,7 @@ async fn watchdog_feed_task(rwdt: &'static mut Rwdt) -> ! {
     }
 }
 
+#[cfg(not(feature = "real-executors"))]
 #[embassy_executor::task]
 async fn shadow_runtime_task(runtime: BoardRuntimeKind) -> ! {
     let mut executor = board::ShadowBoardRuntime::new(runtime);
@@ -603,7 +639,7 @@ async fn net_task(mut runner: embassy_net::Runner<'static, Interface>) { runner.
 async fn usb_command_task(usb: UsbSerialJtag<'static, Blocking>) -> ! {
     use owb_core::{
         ctrl::{sysctrl::I2CCommand, SystemCommand},
-        node::command_bus::{CommandEnvelope, COMMAND_BUS},
+        node::command_bus::{CommandEnvelope, COMMAND_BUS, COMMAND_QUERY_LOCK, COMMAND_REPLY_BUS},
     };
 
     // `drain_rx_fifo` lives on the Rx half; the Tx half stays with esp-println.
@@ -627,6 +663,43 @@ async fn usb_command_task(usb: UsbSerialJtag<'static, Blocking>) -> ! {
                             Ok(text) => match owb_core::net::protocol::parse_command_from_str(text)
                             {
                                 Ok(cmd) => {
+                                    // Sensor reads produce a CommandReply. Wait for
+                                    // it and print it, so the bot is fully usable
+                                    // headless over USB with no network — otherwise
+                                    // the read executes and the answer is dropped.
+                                    // Uses the same COMMAND_QUERY_LOCK the WebSocket
+                                    // gateway takes, so the two transports cannot
+                                    // both be waiting on the single reply channel.
+                                    if owb_core::net::gateway::command_requires_reply(&cmd) {
+                                        let _guard = COMMAND_QUERY_LOCK.lock().await;
+                                        while COMMAND_REPLY_BUS.try_receive().is_ok() {}
+                                        COMMAND_BUS
+                                            .send(CommandEnvelope {
+                                                cmd,
+                                                expects_reply: true,
+                                                received_ms: embassy_time::Instant::now()
+                                                    .as_millis(),
+                                            })
+                                            .await;
+                                        match embassy_time::with_timeout(
+                                            Duration::from_millis(1_000),
+                                            COMMAND_REPLY_BUS.receive(),
+                                        )
+                                        .await
+                                        {
+                                            Ok(reply) => esp_println::println!(
+                                                "[USB_REPLY] {}",
+                                                owb_core::net::gateway::command_reply_to_json(
+                                                    reply
+                                                )
+                                            ),
+                                            Err(_) => esp_println::println!(
+                                                "[USB_REPLY] timeout waiting for reply"
+                                            ),
+                                        }
+                                        len = 0;
+                                        continue;
+                                    }
                                     let envelope = CommandEnvelope {
                                         cmd,
                                         expects_reply: false,

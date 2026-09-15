@@ -17,6 +17,13 @@ pub(super) struct PcntEncoderCapture {
     _pins: [Input<'static>; 6],
     totals: [i32; 3],
     last_raw_counts: [i16; 3],
+    /// Per-consumer `totals` baselines. The control loop and the script-facing
+    /// `read_encoders` query both want "counts since *I* last looked", so they
+    /// cannot share one baseline: whoever polled first would zero the delta for
+    /// the other. The control loop would then see a stalled wheel and wind up
+    /// its integrator, and `read_encoders` would report 0 while the bot drives.
+    control_baseline: [i32; 3],
+    query_baseline: [i32; 3],
 }
 
 #[cfg(feature = "real-executors")]
@@ -55,30 +62,62 @@ impl PcntEncoderCapture {
             _pins: [pin_a0, pin_b0, pin_a1, pin_b1, pin_a2, pin_b2],
             totals: [0; 3],
             last_raw_counts,
+            control_baseline: [0; 3],
+            query_baseline: [0; 3],
         })
     }
 
-    pub(super) fn read_deltas(&mut self) -> [i32; 3] {
+    /// Fold the hardware counters into `totals` and rebase against the raw
+    /// values. Safe to call any number of times per control tick: a second
+    /// call simply adds a zero delta, so `totals` stays an honest absolute
+    /// count no matter which consumer polls first.
+    fn poll(&mut self) {
         let raw_counts = self.raw_counts();
-        let mut delta_counts = [0; 3];
-
-        for index in 0..delta_counts.len() {
-            let delta = raw_counts[index].wrapping_sub(self.last_raw_counts[index]) as i32;
-            delta_counts[index] = delta;
-            self.totals[index] += delta;
-            self.last_raw_counts[index] = raw_counts[index];
+        for ((total, last), raw) in self
+            .totals
+            .iter_mut()
+            .zip(self.last_raw_counts.iter_mut())
+            .zip(raw_counts)
+        {
+            // PCNT units are 16-bit and free-running (no limits set), so
+            // `wrapping_sub` is what makes roll-over transparent.
+            *total += raw.wrapping_sub(*last) as i32;
+            *last = raw;
         }
-
-        delta_counts
     }
 
+    /// Counts accumulated since the *control loop* last asked.
+    pub(super) fn read_deltas(&mut self) -> [i32; 3] {
+        self.poll();
+        Self::drain(&self.totals, &mut self.control_baseline)
+    }
+
+    /// Absolute counts plus the delta since the *query path* last asked.
     pub(super) fn snapshot_and_update(&mut self) -> EncoderData {
-        let delta_counts = self.read_deltas();
+        self.poll();
+        let delta_counts = Self::drain(&self.totals, &mut self.query_baseline);
 
         EncoderData {
             counts: self.totals,
             delta_counts,
         }
+    }
+
+    /// Difference `totals` against one consumer's baseline and advance it.
+    fn drain(
+        totals: &[i32; 3],
+        baseline: &mut [i32; 3],
+    ) -> [i32; 3] {
+        let mut delta_counts = [0i32; 3];
+        for ((delta, total), base) in delta_counts
+            .iter_mut()
+            .zip(totals.iter())
+            .zip(baseline.iter_mut())
+        {
+            *delta = total.wrapping_sub(*base);
+            *base = *total;
+        }
+        delta_counts
     }
 
     pub(super) fn raw_levels(&self) -> [bool; 6] {

@@ -18,6 +18,9 @@ mod probe;
 mod real;
 #[path = "board/sensors.rs"]
 mod sensors;
+// Only compiled when the real GPIO executors are off — otherwise the whole
+// shadow runtime is unreachable and every item in it reports as dead code.
+#[cfg(not(feature = "real-executors"))]
 #[path = "board/shadow.rs"]
 mod shadow;
 #[cfg(feature = "real-executors")]
@@ -37,4 +40,5 @@ use sensors::{
     OnboardMax17048Gauge,
     OnboardTca9555Indicators,
 };
+#[cfg(not(feature = "real-executors"))]
 pub use shadow::ShadowBoardRuntime;
