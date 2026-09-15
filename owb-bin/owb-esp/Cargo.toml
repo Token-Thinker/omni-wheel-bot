@@ -26,9 +26,9 @@ ble = []
 owb-core = { path = "../../owb-core", features = ["net", "serde"], version = "0.2.0" }
 
 # Board-specific and embedded dependencies
-embassy-executor = { version = "0.10.0" }
-embassy-net = { version = "0.9", features = ["dhcpv4"] }
-embassy-time = { version = "0.5" }
+embassy-executor = { workspace = true }
+embassy-net = { workspace = true, features = ["dhcpv4"] }
+embassy-time = { workspace = true }
 
 esp-alloc = { version = "0.10.0" }
 esp-backtrace = { version = "0.19.0", features = ["println", "panic-handler"] }
@@ -39,4 +39,4 @@ esp-println = { version = "0.17.0", features = ["log-04"] }
 esp-radio = { version = "1.0.0-beta.0", features = ["wifi"] }
 
 log = { version = "0.4" }
-picoserve = { version = "0.18.0", features = ["embassy"] }
+picoserve = { workspace = true, features = ["embassy"] }

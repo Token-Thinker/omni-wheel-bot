@@ -23,19 +23,11 @@ sim = ["std", "serde"]
 net = [
     "dep:picoserve",
     "dep:embassy-net",
-    "dep:embedded-io-async",
-    "dep:hashbrown",
-    "dep:lazy_static",
     "dep:embassy-sync",
     "dep:embassy-time",
     "serde",
     "dep:embassy-executor",
 ]
-# Signal that HTTP routes for the PWA UI should be registered.  The actual
-# UI assets (dist/) are embedded by the consuming binary (owb-esp) via
-# include_bytes!, not by owb-core.  This feature no longer pulls in the
-# owb-ui crate (which is WASM-only and cannot link into ESP32 firmware).
-owb-ui = []
 # leds: optional LED traits
 leds = ["dep:smart-leds-trait"]
 # dev-telemetry: raise the compile-time tracing ceiling so debug!/trace! events
@@ -53,15 +45,12 @@ serde = { version = "1", default-features = false, features = ["derive", "alloc"
 serde_json = { version = "1", default-features = false, features = ["alloc"] }
 tracing = { version = "0.1.44", default-features = false, features = ["log", "attributes", "release_max_level_info"] }
 
-picoserve = { version = "0.18.0", features = ["embassy", "ws"], optional = true }
-embassy-net = {version = "0.9", features = ["udp","dhcpv4"], optional = true}
-embedded-io-async = { version = "0.7.0", optional = true }
-hashbrown = { version = "0.16.1", optional = true }
-lazy_static = { version = "1.5.0", features = ["spin_no_std"], optional = true }
+picoserve = { workspace = true, features = ["embassy", "ws"], optional = true }
+embassy-net = { workspace = true, features = ["udp", "dhcpv4"], optional = true }
 smart-leds-trait = { version = "0.3.0", optional = true }
 embassy-sync = { version = "0.7.2", optional = true }
-embassy-time = { version = "0.5.0", optional = true }
-embassy-executor = { version = "0.10.0", optional = true }
+embassy-time = { workspace = true, optional = true }
+embassy-executor = { workspace = true, optional = true }
 static_cell = { version = "2.1.1" }
 
 [dev-dependencies]

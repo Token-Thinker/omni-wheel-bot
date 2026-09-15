@@ -6,8 +6,24 @@ members = [
     "owb-bin/owb-esp",
     "owb-bin/owb-host-sim",
 ]
-
 resolver = "2"
+
+# Single source of truth for versions of third-party crates used by more than
+# one member, so a bump lands everywhere at once.
+#
+# Deliberately limited to deps whose members all want the same
+# `default-features` setting. `serde`, `serde_json` and `tracing` are NOT here:
+# the no_std crates need `default-features = false` while the host/wasm crates
+# need std, and a member's `default-features = false` is *silently ignored*
+# unless the workspace entry sets it too. Inheriting them turned serde/std on
+# for everyone, which broke picoserve's no_std `serde::de::Error` impl with a
+# `DeserializationError: StdError` bound error. Inheritance cannot express that
+# disagreement, so those three stay per-member with matched version strings.
+[workspace.dependencies]
+picoserve = { version = "0.18.0" }
+embassy-net = { version = "0.9" }
+embassy-time = { version = "0.5.0" }
+embassy-executor = { version = "0.10.0" }
 
 [profile.dev]
 opt-level = "s"
