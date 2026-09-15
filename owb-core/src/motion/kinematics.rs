@@ -9,7 +9,9 @@
 //! # Example
 //! ```rust
 //! use owb_core::motion::kinematics::EmbodiedKinematics;
-//! let kin = EmbodiedKinematics::new(0.148, 0.195, 7.0);
+//! // wheel radius 19 mm (38 mm Nexus omni), centre-to-wheel 195 mm,
+//! // max wheel speed 50 rad/s (measured).
+//! let kin = EmbodiedKinematics::new(0.019, 0.195, 50.0);
 //! let wheel_speeds = kin.compute_wheel_velocities(0.8, 90.0, 0.0, 0.2);
 //! ```
 use core::f32::consts::PI;
@@ -22,24 +24,83 @@ pub struct EmbodiedKinematics {
     wheel_radius: f32,
     /// Robot center-to-wheel distance (m)
     robot_radius: f32,
-    /// Precomputed wheel mounting angles (rad)
+    /// Precomputed wheel **drive-direction** angles (rad).
+    ///
+    /// These are the directions each wheel pushes, not its mounting position
+    /// on the chassis circle. That is why [`Self::construct_jacobian`] uses
+    /// `(cos, sin)` — the radial-looking form is correct for drive directions.
+    /// (Mounting-position angles would require the tangential `(-sin, cos)`.)
+    /// Inherited from the original OmniBot animation model.
     wheel_angles: [f32; 3],
     /// Maximum wheel angular speed (rad/s) used for normalisation
     max_wheel_rad_s: f32,
 }
 
+/// Default wheel drive-direction angles in degrees: 60°, 180°, 300°.
+///
+/// Evenly spaced 120° apart, matching the original OmniBot animation model and
+/// every board profile to date.
+pub const DEFAULT_WHEEL_ANGLES_DEG: [f32; 3] = [60.0, 180.0, 300.0];
+
 impl EmbodiedKinematics {
-    /// Instantiate with a given wheel/robot radii and wheel speed limit.
+    /// Instantiate with the [`DEFAULT_WHEEL_ANGLES_DEG`] layout.
+    ///
+    /// Note that `wheel_radius` and `robot_radius` **cancel out** of the
+    /// normalised control path (see
+    /// [`Self::compute_wheel_velocities`]) — they matter only for physical
+    /// quantities such as [`Self::max_yaw_deg_s`],
+    /// [`Self::max_linear_speed`], and encoder-to-distance odometry. The wheel
+    /// *angles* are what actually determine steering, so use
+    /// [`Self::new_with_angles`] if your layout differs.
     pub fn new(
         wheel_radius: f32,
         robot_radius: f32,
         max_wheel_rad_s: f32,
     ) -> Self {
-        let wheel_angles = [PI / 3.0, PI, 5.0 * PI / 3.0];
+        Self::new_with_angles(
+            wheel_radius,
+            robot_radius,
+            max_wheel_rad_s,
+            DEFAULT_WHEEL_ANGLES_DEG,
+        )
+    }
+
+    /// Instantiate with an explicit wheel layout.
+    ///
+    /// `wheel_angles_deg` are **drive-direction** angles (the direction each
+    /// wheel pushes), not mounting positions on the chassis circle — see the
+    /// [`Self::wheel_angles`] field docs.
+    ///
+    /// This is the only geometry input that changes how the robot steers, which
+    /// is why it is worth carrying per-board rather than hard-coding. A layout
+    /// rotated to suit the chassis or the camera's forward direction is a
+    /// config change, not a code change.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use owb_core::motion::kinematics::{EmbodiedKinematics, DEFAULT_WHEEL_ANGLES_DEG};
+    ///
+    /// // Equivalent to `new`.
+    /// let a = EmbodiedKinematics::new(0.019, 0.195, 50.0);
+    /// let b = EmbodiedKinematics::new_with_angles(
+    ///     0.019, 0.195, 50.0, DEFAULT_WHEEL_ANGLES_DEG,
+    /// );
+    /// assert_eq!(
+    ///     a.compute_wheel_velocities(0.5, 30.0, 0.0, 0.2),
+    ///     b.compute_wheel_velocities(0.5, 30.0, 0.0, 0.2),
+    /// );
+    /// ```
+    pub fn new_with_angles(
+        wheel_radius: f32,
+        robot_radius: f32,
+        max_wheel_rad_s: f32,
+        wheel_angles_deg: [f32; 3],
+    ) -> Self {
         Self {
             wheel_radius,
             robot_radius,
-            wheel_angles,
+            wheel_angles: wheel_angles_deg.map(|d| d * (PI / 180.0)),
             max_wheel_rad_s,
         }
     }
@@ -84,9 +145,41 @@ impl EmbodiedKinematics {
 
     /// Transform a global motion command into body-frame velocities.
     ///
-    /// `speed` is the translational magnitude (normalised), while `angle` and
-    /// `orientation` are in degrees (0° = +X, increasing CCW). Returns `(vx, vy)`
-    /// as normalised body-frame components.
+    /// `speed` is the translational magnitude (normalised); `angle` and
+    /// `orientation` are in degrees, increasing CCW, with `angle = 0` meaning
+    /// "straight ahead".
+    ///
+    /// # Return convention
+    ///
+    /// Returns `(strafe, forward)` — **not** `(vx, vy)`:
+    ///
+    /// ```text
+    /// .0 = -speed * sin(angle - orientation)   // strafe, positive = right
+    /// .1 =  speed * cos(angle - orientation)   // forward
+    /// ```
+    ///
+    /// So `angle = 0` yields `(0, +speed)` and `angle = 90` yields
+    /// `(-speed, 0)`. The pair is the natural `(cos, sin)` heading vector
+    /// rotated +90°, which is why the forward component lands in `.1`.
+    ///
+    /// This ordering is **load-bearing, not incidental**:
+    ///
+    /// * [`Self::compute_wheel_velocities`] feeds `.0` into the Jacobian's
+    ///   `cos(θ)` column and `.1` into its `sin(θ)` column, so with the default
+    ///   [`DEFAULT_WHEEL_ANGLES_DEG`] layout a pure-forward command drives
+    ///   wheels 1 and 3 in opposition and leaves wheel 2 idle
+    ///   (`[+0.866, 0, -0.866]`).
+    /// * The v1-alpha two-wheel drive path destructures this as
+    ///   `let (_, forward) = convert_to_body_frame(..)`. Reordering the tuple to
+    ///   a conventional `(vx, vy)` would silently hand that path the *strafe*
+    ///   component, and a 0° forward command would drive nothing at all.
+    ///
+    /// The residual +90° offset between "command 0°" and the Jacobian's X axis
+    /// is redundant now that wheel angles are configurable — the same result is
+    /// expressible by rotating [`Self::new_with_angles`] inputs by 90°. It is
+    /// kept because the board profiles' `wheel_phase_invert` flags were tuned on
+    /// hardware against *this* convention. See
+    /// `body_frame_puts_forward_in_second_element` for the pinning test.
     pub fn convert_to_body_frame(
         speed: f32,
         angle: f32,
@@ -162,7 +255,7 @@ impl EmbodiedKinematics {
         let vy = vy_norm * self.max_linear_speed();
         let omega = omega.clamp(-1.0, 1.0) * self.max_yaw_rad_s();
         let j = self.construct_jacobian();
-        let mut out = [0.0; 3];
+        let mut out = [0.0f32; 3];
         for i in 0..3 {
             let rad_s = j[i][0] * vx + j[i][1] * vy + j[i][2] * omega;
             let norm = if self.max_wheel_rad_s > 0.0 {
@@ -174,12 +267,29 @@ impl EmbodiedKinematics {
             // A non-finite norm (NaN/inf from degenerate inputs) must collapse
             // to zero: `NaN.clamp(..)` returns NaN, which would otherwise slip
             // through to PWM and drive a wheel uncontrollably.
-            out[i] = if !norm.is_finite() || norm.abs() < 1e-6 {
-                0.0
+            out[i] = if norm.is_finite() { norm } else { 0.0 };
+        }
+
+        // Scale the wheel vector as a whole instead of clamping each wheel
+        // independently. Truncating only the saturated wheel changes the ratios
+        // between wheels, and on an omni platform those ratios *are* the
+        // commanded direction — so per-wheel clamping made the robot veer off
+        // the commanded heading under a combined translate+yaw, rather than
+        // simply travelling slower along it.
+        let peak = out.iter().fold(0.0f32, |acc, v| acc.max(v.abs()));
+        if peak > 1.0 {
+            let scale = 1.0 / peak;
+            for v in out.iter_mut() {
+                *v *= scale;
             }
-            else {
-                norm.clamp(-1.0, 1.0)
-            };
+        }
+
+        for v in out.iter_mut() {
+            if v.abs() < 1e-6 {
+                *v = 0.0;
+            }
+            // Backstop against residual float error from the scaling above.
+            *v = v.clamp(-1.0, 1.0);
         }
         out
     }
@@ -345,5 +455,185 @@ mod tests {
         let kin = EmbodiedKinematics::new(0.148, 0.195, 7.0);
         let wheels = kin.compute_wheel_velocities(0.0, 0.0, 0.0, 1.0);
         assert!(wheels.iter().all(|&v| (v.abs() - 1.0).abs() < 1e-5));
+    }
+
+    /// The normalised control path must be invariant to wheel/robot radius.
+    ///
+    /// `compute_wheel_velocities` scales the command by
+    /// `max_linear_speed = max_wheel_rad_s * r` while the Jacobian divides by
+    /// `r`, and the yaw term cancels through `l` the same way — so only the
+    /// wheel *angles* survive. This is load-bearing: it means the radii are
+    /// needed solely for genuinely physical quantities (deg/s yaw mapping,
+    /// reported m/s, encoder-to-distance odometry), and a geometry correction
+    /// cannot silently change how the robot steers.
+    #[test]
+    fn normalised_output_is_invariant_to_radii() {
+        let cases = [(1.0, 0.0, 0.0), (0.6, 35.0, 0.3), (0.4, 200.0, -0.5)];
+        for (speed, angle, omega) in cases {
+            let reference = EmbodiedKinematics::new(0.019, 0.195, 50.0)
+                .compute_wheel_velocities(speed, angle, 0.0, omega);
+            for (r, l, w) in [(0.148, 0.195, 25.0), (1.0, 2.0, 7.0), (0.03, 0.08, 120.0)] {
+                let other = EmbodiedKinematics::new(r, l, w)
+                    .compute_wheel_velocities(speed, angle, 0.0, omega);
+                for i in 0..3 {
+                    assert!(
+                        (reference[i] - other[i]).abs() < 1e-5,
+                        "wheel {i} changed with geometry r={r} l={l} w={w}: \
+                         {} vs {}",
+                        reference[i],
+                        other[i]
+                    );
+                }
+            }
+        }
+    }
+
+    /// The physical derived figures must match the measured robot.
+    ///
+    /// Guards the geometry correction: 38 mm Nexus omni wheel (r = 0.019 m)
+    /// with the bench-measured `max_wheel_rad_s = 50` gives ~0.95 m/s, which
+    /// the host-sim independently arrived at as 0.9. The previous
+    /// (0.148, 25.0) pair implied 3.7 m/s and 1087 deg/s — about 3 rev/s.
+    #[test]
+    fn physical_limits_match_measured_hardware() {
+        let kin = EmbodiedKinematics::new(0.019, 0.195, 50.0);
+        let lin = kin.max_linear_speed();
+        assert!(
+            (lin - 0.95).abs() < 0.01,
+            "max_linear_speed should be ~0.95 m/s, got {lin}"
+        );
+        let yaw = kin.max_yaw_deg_s();
+        assert!(
+            (200.0..350.0).contains(&yaw),
+            "max_yaw_deg_s should be a plausible ~279 deg/s, got {yaw}"
+        );
+    }
+
+    /// Regression guard: saturation must preserve the commanded direction.
+    ///
+    /// Clamping each wheel independently truncated only the saturated wheel,
+    /// changing the ratios between wheels — which on an omni base rotates the
+    /// actual direction of travel away from what was commanded.
+    #[test]
+    fn saturation_preserves_wheel_ratios() {
+        let kin = EmbodiedKinematics::new(0.148, 0.195, 7.0);
+        // Full translation plus full yaw: guaranteed to push a wheel past 1.0.
+        let unscaled = {
+            // Reproduce the pre-scaling vector straight from the Jacobian.
+            let (vx_n, vy_n) = EmbodiedKinematics::convert_to_body_frame(1.0, 35.0, 0.0);
+            let vx = vx_n * kin.max_linear_speed();
+            let vy = vy_n * kin.max_linear_speed();
+            let omega = kin.max_yaw_rad_s();
+            let j = kin.construct_jacobian();
+            let mut v = [0.0f32; 3];
+            for i in 0..3 {
+                v[i] = (j[i][0] * vx + j[i][1] * vy + j[i][2] * omega) / 7.0;
+            }
+            v
+        };
+        let peak = unscaled.iter().fold(0.0f32, |a, v| a.max(v.abs()));
+        assert!(
+            peak > 1.0,
+            "test setup must actually saturate (peak={peak})"
+        );
+
+        let wheels = kin.compute_wheel_velocities(1.0, 35.0, 0.0, 1.0);
+        assert!(
+            wheels.iter().all(|&v| v.abs() <= 1.0 + 1e-5),
+            "output must stay within +/-1: {wheels:?}"
+        );
+        // At least one wheel should now sit at the limit.
+        let out_peak = wheels.iter().fold(0.0f32, |a, v| a.max(v.abs()));
+        assert!(
+            (out_peak - 1.0).abs() < 1e-4,
+            "peak should be 1.0: {out_peak}"
+        );
+
+        // The direction is encoded in the ratios; uniform scaling preserves them.
+        for i in 0..3 {
+            let expected = unscaled[i] / peak;
+            assert!(
+                (wheels[i] - expected).abs() < 1e-4,
+                "wheel {i} ratio distorted: got {} expected {expected}",
+                wheels[i]
+            );
+        }
+    }
+
+    /// Pins the `(strafe, forward)` return order of `convert_to_body_frame`.
+    ///
+    /// `board/real.rs::two_wheel_front_targets` destructures this as
+    /// `let (_, forward) = ..`, so swapping the tuple to a conventional
+    /// `(vx, vy)` would feed the two-wheel drive path the strafe component and
+    /// a 0-degree forward command would produce no motion. If this test fails,
+    /// that call site (and `wheel_phase_invert` on every profile) must be
+    /// revisited in the same change -- do not just update the expectation.
+    #[test]
+    fn body_frame_puts_forward_in_second_element() {
+        let (strafe, forward) = EmbodiedKinematics::convert_to_body_frame(1.0, 0.0, 0.0);
+        assert!(
+            forward > 0.99,
+            "0 deg must be full forward in .1, got {forward}"
+        );
+        assert!(
+            strafe.abs() < 1e-6,
+            "0 deg must have no strafe, got {strafe}"
+        );
+
+        let (strafe, forward) = EmbodiedKinematics::convert_to_body_frame(1.0, 90.0, 0.0);
+        assert!(
+            strafe < -0.99,
+            "90 deg must be full negative strafe in .0, got {strafe}"
+        );
+        assert!(
+            forward.abs() < 1e-6,
+            "90 deg must have no forward, got {forward}"
+        );
+    }
+
+    /// Orientation is subtracted from the command angle, so holding a heading
+    /// while the body is rotated keeps the world-frame direction fixed.
+    #[test]
+    fn body_frame_compensates_orientation() {
+        let (_, forward) = EmbodiedKinematics::convert_to_body_frame(1.0, 90.0, 90.0);
+        assert!(
+            forward > 0.99,
+            "command 90 deg with body at 90 deg is forward in body frame, got {forward}"
+        );
+    }
+
+    /// The default layout's pure-forward wheel pattern. Wheel 2 idles because
+    /// its drive direction (180 deg) is perpendicular to the Jacobian axis that
+    /// forward lands on. Guards against a silent 90-degree convention shift.
+    #[test]
+    fn forward_command_matches_default_layout_pattern() {
+        let kin = EmbodiedKinematics::new(0.019, 0.195, 50.0);
+        let wheels = kin.compute_wheel_velocities(1.0, 0.0, 0.0, 0.0);
+        assert!(
+            (wheels[0] - 0.866).abs() < 0.01,
+            "wheel 1 expected +0.866, got {}",
+            wheels[0]
+        );
+        assert!(
+            wheels[1].abs() < 1e-6,
+            "wheel 2 expected idle, got {}",
+            wheels[1]
+        );
+        assert!(
+            (wheels[2] + 0.866).abs() < 0.01,
+            "wheel 3 expected -0.866, got {}",
+            wheels[2]
+        );
+    }
+
+    /// A 90-degree strafe redistributes effort onto wheel 2 -- the complement
+    /// of the forward pattern above.
+    #[test]
+    fn strafe_command_matches_default_layout_pattern() {
+        let kin = EmbodiedKinematics::new(0.019, 0.195, 50.0);
+        let wheels = kin.compute_wheel_velocities(1.0, 90.0, 0.0, 0.0);
+        assert!((wheels[0] + 0.5).abs() < 0.01, "got {}", wheels[0]);
+        assert!((wheels[1] - 1.0).abs() < 0.01, "got {}", wheels[1]);
+        assert!((wheels[2] + 0.5).abs() < 0.01, "got {}", wheels[2]);
     }
 }

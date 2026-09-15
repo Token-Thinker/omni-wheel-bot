@@ -4,6 +4,14 @@ use core::f32::consts::TAU;
 
 use crate::motion::encoder::VelocityEstimator;
 
+/// Smallest interval the derivative term is computed over.
+///
+/// dt is derived from millisecond timestamps, so anything below this is a
+/// rounding artifact rather than a real elapsed time, and a difference quotient
+/// over it is pure amplification. The control loop nominally runs at 50 ms, so
+/// this is three orders of magnitude below any legitimate interval.
+const MIN_DERIVATIVE_DT_S: f32 = 1e-4;
+
 /// Simple clamped PID controller for wheel-speed or other scalar loops.
 #[derive(Clone, Copy, Debug)]
 pub struct PidController {
@@ -62,6 +70,16 @@ impl PidController {
 
         let derivative = if self.first_update {
             self.first_update = false;
+            0.0
+        }
+        else if dt < MIN_DERIVATIVE_DT_S {
+            // Callers derive dt from millisecond timestamps, so two updates
+            // inside the same millisecond yield dt == 0.0, floored to 1e-6
+            // above. Dividing by that scales the error difference by up to 1e6
+            // and saturates the output to +/-output_limit — a full-scale PWM
+            // spike from a rounding artifact. The P and I terms remain valid at
+            // any dt, so only the difference quotient is suppressed.
+            // `encoder.rs` already takes this position for dt <= 0.
             0.0
         }
         else {
@@ -156,6 +174,38 @@ impl TriWheelPidController {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression guard: with `dt` floored at 1e-6 and then divided into, two
+    /// updates inside one millisecond turned a 0.001 error change into a
+    /// full-scale output spike.
+    #[test]
+    fn pid_same_millisecond_update_does_not_saturate_output() {
+        // kd matches the live board tuning (0.90, 0.20, 0.02).
+        let mut pid = PidController::new(0.9, 0.2, 0.02, 1.0, 1.0);
+        // Settle first_update and establish last_error at a realistic 50 ms dt.
+        pid.update(0.500, 0.0, 0.05);
+        // Second update in the same millisecond: dt rounds to 0.0.
+        let out = pid.update(0.501, 0.0, 0.0);
+        assert!(
+            out.abs() < 1.0,
+            "output saturated from a zero-dt derivative: {out}"
+        );
+        // P + I only, so it should track the small error, not slam the limit.
+        assert!(out.abs() < 0.8, "unexpectedly large output: {out}");
+    }
+
+    #[test]
+    fn pid_derivative_still_applies_at_realistic_dt() {
+        let mut pid = PidController::new(0.0, 0.0, 1.0, 1.0, 10.0);
+        // First call consumes `first_update`, so the D term is skipped there.
+        pid.update(0.0, 0.0, 0.05);
+        // error moves 0.0 -> 0.5 over 50 ms => derivative 10.0, with kd 1.0.
+        let out = pid.update(0.5, 0.0, 0.05);
+        assert!(
+            (out - 10.0).abs() < 0.01,
+            "derivative term was suppressed at a legitimate dt: {out}"
+        );
+    }
 
     #[test]
     fn pid_zero_error_outputs_zero() {
