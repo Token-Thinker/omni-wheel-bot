@@ -13,6 +13,13 @@ board_registry_file() {
   echo "$__DIR/../config/board_registry.tsv"
 }
 
+# Optional, gitignored per-lab override. Entries here win over the tracked
+# registry, so a specific physical unit (matched by serial) can be tagged with
+# its quirks without committing lab inventory to the public repo.
+board_registry_local_file() {
+  echo "$__DIR/../config/board_registry.local.tsv"
+}
+
 _sys_attr() {
   local file="${1:-}"
   [[ -f "$file" ]] || return 1
@@ -75,9 +82,15 @@ _apply_probe_mapping() {
 }
 
 _registry_match_probe() {
-  local file line kind value maker board bin profile label
-  file=$(board_registry_file)
-  [[ -f "$file" ]] || return 1
+  # Local override wins over the tracked registry; first file to match returns.
+  _registry_match_in_file "$(board_registry_local_file)" && return 0
+  _registry_match_in_file "$(board_registry_file)" && return 0
+  return 1
+}
+
+_registry_match_in_file() {
+  local file="${1:-}" line kind value maker board bin profile label
+  [[ -n "$file" && -f "$file" ]] || return 1
 
   while IFS= read -r line || [[ -n "$line" ]]; do
     kind=$(awk -F '\t' '{print $1}' <<< "$line")
