@@ -143,9 +143,34 @@ const POLOLU_5161_COUNTS_PER_WHEEL_REV: u16 = 12 * 50;
 const EXEC_PLAN_S3_DUAL: RuntimeExecutionPlan = RuntimeExecutionPlan::dual_core(1, 0, 0);
 
 const DEFAULT_DRIVE_TUNING: DriveTuning = DriveTuning {
-    wheel_radius_m: 0.148,
+    // 38 mm Nexus omni wheel => 19 mm radius. NOTE the units: metres, not mm.
+    //
+    // Why this is safe to change: `wheel_radius_m` and `robot_radius_m` CANCEL
+    // OUT of the normalised control path. `compute_wheel_velocities` scales the
+    // command by `max_linear_speed = max_wheel_rad_s * r` and the Jacobian
+    // divides by `r`, so the normalised wheel output depends only on the wheel
+    // *angles*. Verified numerically with r = 0.019, 0.148 and 1.0 — identical
+    // output. So these values only affect genuinely physical quantities:
+    //   * `max_yaw_deg_s`, hence the deg/s -> normalised yaw mapping
+    //   * `max_linear_speed`, i.e. any m/s figure we report
+    //   * encoder counts -> distance (odometry)
+    wheel_radius_m: 0.019,
     robot_radius_m: 0.195,
-    max_wheel_rad_s: 25.0,
+    // Measured on the v1-alpha bench unit, not nominal: `probe_speed 1.0` gave
+    // 4769 counts/s = 7.95 rev/s = 49.9 rad/s. The previous 25.0 was half the
+    // real value, which mattered because `TriWheelPidController` normalises
+    // feedback as `measured_rad_s / max_wheel_rad_s` — so `measured_norm`
+    // clamped to 1.0 permanently and the PID fought its own setpoint.
+    //
+    // With r = 0.019 and 50.0 the derived figures finally match reality:
+    // max_linear_speed = 0.95 m/s (the host-sim independently uses 0.9), and
+    // max_yaw = 279 deg/s. The old pair implied 3.7 m/s and 1087 deg/s
+    // (3 rev/s), neither of which this robot can do.
+    max_wheel_rad_s: 50.0,
+    // The one geometry input that actually changes steering (the two radii
+    // above provably cancel). Carried per-board so a rotated layout is a
+    // config change, not a code change.
+    wheel_angles_deg: owb_core::motion::kinematics::DEFAULT_WHEEL_ANGLES_DEG,
     control_dt_ms: 50,
     motor_deadband_norm: 0.15,
     counts_per_wheel_revolution: POLOLU_5161_COUNTS_PER_WHEEL_REV,
@@ -368,6 +393,22 @@ pub const OWB_ESP32S3_V1_ALPHA: BoardProfile = BoardProfile {
     ..OWB_ESP32S3_V1
 };
 
+/// **PLACEHOLDER — every pin in this profile is wrong and must be redone.**
+///
+/// The v2 board is schematic-only and its structure is not settled, so this map
+/// was never derived from a real layout. Treat the numbers as filler that exists
+/// only to keep the profile table compiling; do not wire anything to them and do
+/// not use them as a starting point for the real map.
+///
+/// Known-bad today (the boot conflict checker reports all of these):
+/// `GPIO4` sda+motor3.phase, `GPIO38` motor1.drive+enc1.a,
+/// `GPIO39` motor2.phase+enc1.b, `GPIO40` motor3.drive+enc2.a,
+/// `GPIO42` enc3.a+addressable_led. The camera pins happen not to collide,
+/// which is luck rather than design.
+///
+/// When the v2 structure is finalised, this whole block gets replaced --
+/// including re-deriving `drive_mode`, `active_wheels`, and
+/// `wheel_phase_invert`, none of which have seen hardware.
 pub const OWB_ESP32S3_V2: BoardProfile = BoardProfile {
     name: "owb-esp32s3-v2",
     family: BoardFamily::Esp32S3,
