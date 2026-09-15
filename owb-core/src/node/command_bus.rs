@@ -418,6 +418,17 @@ where
             Ordering::Relaxed,
         );
         last_exec_ms = now_ms;
+        // Evaluate the deadman watchdog on the execute path too, not just the
+        // idle branches. A sustained stream of non-motion commands (LED effects,
+        // sensor reads) keeps the queue non-empty, so the loop never reaches an
+        // idle branch and the failsafe would never be checked — leaving the
+        // wheels driving on the last motion command indefinitely. This is the
+        // same starvation class as the LED-tick bug fixed inline just below.
+        //
+        // Safe to run unconditionally: the arm/disarm block above already set
+        // `last_motion_ms = now_ms` for an active motion command, so that case
+        // has `age_ms == 0` and cannot trip.
+        trip_motion_watchdog_if_idle(executor, now_ms, last_motion_ms, &mut motion_active);
         // LED-animation tick: drive it from the independent wall-clock deadline
         // rather than resetting the deadline on every command. A sustained
         // joystick stream keeps the loop draining commands without ever
@@ -435,7 +446,19 @@ where
         }
         maybe_log_command_metrics(&mut last_log_ms);
         if envelope.expects_reply {
-            COMMAND_REPLY_BUS.send(reply).await;
+            // try_send, never send().await: a cancelled query (client disconnect
+            // between send and receive — routine on WiFi) leaves an orphan reply
+            // queued. With a blocking send, four such orphans fill this
+            // capacity-4 channel and the bus stalls forever — motion commands
+            // stop executing *and* the deadman watchdog above stops running, so
+            // the wheels keep driving. Dropping a reply only fails one query,
+            // which the requester already handles via timeout.
+            if COMMAND_REPLY_BUS.try_send(reply).is_err() {
+                tracing::warn!(
+                    target: "owb::cmdbus",
+                    "reply bus full; dropped reply (stale queries pending?)"
+                );
+            }
         }
     }
 }
@@ -762,12 +785,7 @@ mod watchdog_tests {
 
         // Mirror the bus-loop arm/disarm logic.
         if arms_watchdog(&cmd) {
-            if is_active_motion_command(&cmd) {
-                motion_active = true;
-            }
-            else {
-                motion_active = false;
-            }
+            motion_active = is_active_motion_command(&cmd);
         }
 
         assert!(
