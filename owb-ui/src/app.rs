@@ -31,10 +31,16 @@ fn resolve_ws_url(control_key: &str) -> String {
     let query = loc.search().unwrap_or_default();
     let query_params = web_sys::UrlSearchParams::new_with_str(&query.trim_start_matches('?')).ok();
 
-    let host = hash_params
+    // A host supplied by the *link* is attacker-controllable; one coming from
+    // localStorage was entered deliberately via the settings drawer. Track
+    // which, because the control key must never be handed to the former.
+    let host_from_link = hash_params
         .as_ref()
         .and_then(|p| p.get("host"))
-        .or_else(|| query_params.as_ref().and_then(|p| p.get("host")))
+        .or_else(|| query_params.as_ref().and_then(|p| p.get("host")));
+    let host_came_from_link = host_from_link.is_some();
+
+    let host = host_from_link
         // Reject the old "owb.local" default if it was saved to storage by a
         // previous load — it was never a real mDNS name on this bot.
         .or_else(|| {
@@ -54,8 +60,6 @@ fn resolve_ws_url(control_key: &str) -> String {
             format!("{}//{}/ws", ws_proto, page_host)
         });
 
-    storage::set(storage::KEY_HOST, &host);
-
     // Mint a random session id
     let session_id = format!(
         "ui-{:08x}",
@@ -65,8 +69,20 @@ fn resolve_ws_url(control_key: &str) -> String {
     // Build URL with session + key params
     let url = web_sys::Url::new(&host)
         .unwrap_or_else(|_| web_sys::Url::new("ws://owb.local/ws").unwrap());
+
+    // A link-supplied host is only trusted when it points back at the page's
+    // own origin. Otherwise `https://bot/?host=ws://attacker/ws` would make the
+    // PWA hand the saved control key to an arbitrary server — and, once
+    // persisted, keep doing so on every subsequent load.
+    let page_host = loc.host().unwrap_or_default();
+    let trusted_host = !host_came_from_link || url.host() == page_host;
+
+    if trusted_host {
+        storage::set(storage::KEY_HOST, &host);
+    }
+
     url.search_params().set("session", &session_id);
-    if !control_key.is_empty() {
+    if !control_key.is_empty() && trusted_host {
         url.search_params().set("key", control_key);
     }
     url.href()
@@ -184,10 +200,18 @@ pub fn App() -> impl IntoView {
     // Send enable + first battery poll on open
     {
         let ws_for_open = ws.clone();
+        // Auto-enable fires on the FIRST open only. Re-enabling on every
+        // reconnect meant a network blip brought the motors back live with no
+        // operator action — and the robot may have moved or be in someone's
+        // hands by then. After a drop the operator must explicitly re-enable.
+        let enabled_once = std::cell::Cell::new(false);
         Effect::new(move |prev_state: Option<ConnState>| {
             let state = conn_state_for_open.get();
             if state == ConnState::Open && prev_state != Some(ConnState::Open) {
-                ws_for_open.send(&I2CCommand::enable());
+                if !enabled_once.get() {
+                    enabled_once.set(true);
+                    ws_for_open.send(&I2CCommand::enable());
+                }
                 ws_for_open.send(&I2CCommand::read_power());
             }
             state
@@ -222,6 +246,7 @@ pub fn App() -> impl IntoView {
     let ws_for_joystick = ws.clone();
     let ws_for_drawer = ws.clone();
     let ws_for_camera = ws.clone();
+    let ws_for_estop = ws.clone();
 
     let on_reconnect = {
         let ws = ws.clone();
@@ -240,6 +265,7 @@ pub fn App() -> impl IntoView {
 
     view! {
         <TopStrip
+            ws=ws_for_estop
             conn_state=conn_state
             battery_label=battery_label
             drawer_open=drawer_open

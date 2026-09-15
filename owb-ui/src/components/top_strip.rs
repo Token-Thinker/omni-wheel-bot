@@ -1,15 +1,30 @@
-//! Top ambient strip: connection indicator + battery readout (left), gear button (right).
+//! Top ambient strip: connection indicator + battery readout (left), E-stop and
+//! gear button (right).
+
+use std::rc::Rc;
 
 use leptos::prelude::*;
 
-use crate::transport::ConnState;
+use crate::transport::{ConnState, PowerCmd, WsClient};
 
 #[component]
 pub fn TopStrip(
+    ws: Rc<WsClient>,
     conn_state: RwSignal<ConnState>,
     battery_label: RwSignal<String>,
     drawer_open: RwSignal<bool>,
 ) -> impl IntoView {
+    // E-stop latches motors off in firmware (`executor.rs` PowerCommand::Estop
+    // clears `enabled` and zeroes motion), verified on hardware: a normal
+    // translate command after an E-stop produces zero encoder movement until an
+    // explicit re-enable. Deliberately always enabled — an operator must be
+    // able to hit it even when the connection indicator looks unhealthy.
+    let on_estop = {
+        let ws = ws.clone();
+        move |_| {
+            ws.send(&PowerCmd::estop());
+        }
+    };
     let conn_state_str = move || conn_state.get().as_str();
     let conn_label = move || {
         if conn_state.get() == ConnState::AuthError {
@@ -41,6 +56,16 @@ pub fn TopStrip(
                 </span>
             </div>
             <div class="strip-cluster strip-right">
+                <button
+                    id="estop-btn"
+                    class="estop-btn"
+                    type="button"
+                    aria-label="emergency stop"
+                    title="Emergency stop — cuts motors until re-enabled"
+                    on:click=on_estop
+                >
+                    "STOP"
+                </button>
                 <button
                     id="settings-toggle"
                     class="icon-btn"

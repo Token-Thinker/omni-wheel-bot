@@ -152,6 +152,36 @@ body {
   display: block;
 }
 
+/* Emergency stop. Latches motors off in firmware until an explicit re-enable,
+   so it is styled to be unmistakable and is never disabled — the operator must
+   be able to reach it regardless of connection state. */
+.estop-btn {
+  appearance: none;
+  background: var(--danger);
+  border: none;
+  color: #fff;
+  font: inherit;
+  font-weight: 700;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  padding: 0.4rem 0.7rem;
+  border-radius: 0.5rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: filter 150ms ease, box-shadow 150ms ease;
+}
+.estop-btn:hover,
+.estop-btn:focus-visible {
+  filter: brightness(1.12);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 30%, transparent);
+  outline: none;
+}
+.estop-btn:active {
+  filter: brightness(0.92);
+}
+
 /* ---------- joystick area ---------- */
 /* The entire body is the touch area; the visual joystick is hidden until the
    operator touches the screen, then spawns centered on the touch point. */
