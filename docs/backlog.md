@@ -670,9 +670,10 @@ no `xtask`, no watch-reflash.
 
 ## UI Items — Steps (for the SoftAP/BLE + auth work)
 
-Canonical UI source is `owb-ui/ts/src/`; `assets/script.js` + `index.bundled.html`
-are esbuild output — after any TS edit run `npm run build` in `owb-ui/ts` (done for
-the C1 key change this pass).
+Canonical UI source is the Leptos crate under `owb-ui/src/`; rebuild `dist/` with
+`trunk build --release` after edits. (The TypeScript UI these items were first done
+in was removed on 2026-10-23; `app.rs` carries the same `#key=`/`?key=`/localStorage
+resolution.)
 - [x] Control key entry: `main.ts` reads the secret from `#key=`/`?key=`/localStorage
   and appends `&key=` to the `/ws` URL (C1). Bundle rebuilt.
 - [ ] Auth UX: on a `1008 Unauthorized` close, show a "key required / wrong key"

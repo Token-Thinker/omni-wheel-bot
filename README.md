@@ -53,7 +53,7 @@ site:
 - `owb-bin/owb-esp/`: ESP32-S3 firmware using `esp-hal`, `esp-radio`/`esp-rtos`, and Embassy. `owb-bin/owb-esp/src/profile/mod.rs` defines board behavior (camera, motor, and IO profile data); the default profile is the current v2 custom board (`owb-esp32s3-v2`). Only `esp32s3` is supported; legacy ESP32 (non-S3) targets were removed in v0.1.9.
   Custom S3 profiles perform a boot-time I2C self-test (TCA9555, LIS2DH12, HDC2010, MAX17048). By default the firmware keeps the shadow executor for safe bring-up; `--real-executors` enables the GPIO-backed DRV8845 runtime for the supported ESP32-S3 boards before HIL.
 - `owb-bin/owb-host-sim/`: Host simulator (tokio + axum) to test UI + WebSocket without flashing hardware. Ships the `/sim` physics replay viewer (see Quick Start).
-- `owb-ui/`: Embedded operator UI assets shipped as a Rust crate. HTML + CSS are hand-written; `assets/script.js` is the compiled output from the TypeScript source under `owb-ui/ts/`. Consumed by `owb-core` via the `owb-ui` feature (auto-enabled by `net`).
+- `owb-ui/`: Operator UI written in Rust (Leptos, compiled to WebAssembly with Trunk). The built `dist/` is checked in and embedded in the firmware by `owb-bin/owb-esp/src/ui_assets.rs`; see [`owb-ui/README.md`](owb-ui/README.md).
 
 ## Current Board Matrix
 

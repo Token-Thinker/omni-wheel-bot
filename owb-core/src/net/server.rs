@@ -396,9 +396,9 @@ pub(crate) fn frontend_index_response() -> ([(&'static str, &'static str); 1], S
     )
 }
 
-// `/style.css` and `/script.js` are no longer served as separate routes —
-// the bundled HTML at `/` carries both inline. See v0.2 backlog item for the
-// concurrency bug that motivated the change.
+// This crate serves no separate `/style.css` or script route. The Leptos UI's
+// assets (`/app.js`, `/app.wasm`, `/style.css`, ...) are routed by `owb-esp`
+// from `owb-ui/dist` (see `ui_assets.rs`).
 
 /// Run the shared `/camera/stream` route surface with a caller-supplied
 /// handler.
