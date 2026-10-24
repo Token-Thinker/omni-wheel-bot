@@ -11,6 +11,12 @@ default-run = "owb-host-sim"
 name = "hil-check"
 path = "src/bin/hil_check.rs"
 
+# Wheel-tuning rig (Rust port of scripts/tune.py): a WebSocket client that
+# drives probe/drive/trim runs against a bot or this sim.
+[[bin]]
+name = "owb-tune"
+path = "src/bin/owb_tune.rs"
+
 [[bin]]
 name = "owb-host-sim"
 path = "src/main.rs"
@@ -30,3 +36,7 @@ futures-util = "0.3"
 # Serial link for the hardware-in-the-loop bridge (OWB_HIL_SERIAL). Default
 # features (libudev port enumeration) are unneeded — we open a known path.
 serialport = { version = "4", default-features = false }
+# Blocking WebSocket client for owb-tune. Already in the lock file via axum's
+# `ws` feature (tokio-tungstenite 0.24), so this adds no new crates; the sync
+# API keeps the tuner a plain loop instead of an async state machine.
+tungstenite = { version = "0.24", default-features = false, features = ["handshake"] }

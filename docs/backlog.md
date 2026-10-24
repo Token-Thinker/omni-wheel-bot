@@ -604,8 +604,8 @@ model: the control surface drives physical motors and is moving to SoftAP/BLE, s
 - [ ] L4: Run a dependency `cargo-audit` + `cargo-geiger` pass (picoserve,
   esp-radio, serde_json). `unsafe` in-tree is hardware-init only (`AnyPin::steal`
   etc.) — not attacker-reachable.
-- L2/L3: No secrets logged; Python tooling (`tune.py`, `sync_backlog_issues.py`,
-  `alpha_*.py`) reviewed clean (list-form argv, no `eval`/`pickle`/`shell=True`).
+- L2/L3: No secrets logged; Python tooling (`tune.py` -- since ported to Rust as
+  `owb-tune` --, `sync_backlog_issues.py`, `alpha_*.py`) reviewed clean (list-form argv, no `eval`/`pickle`/`shell=True`).
   No action.
 
 ---
@@ -658,9 +658,11 @@ no `xtask`, no watch-reflash.
   run.log` + serial to the browser over the existing WebSocket. Human stays in one
   tab, clicks Flash, watches logs. Effort: M. (Alt: ratatui TUI — lower payoff since
   the web surface already exists.)
-- [ ] P2: Promote `tune.py` to first-class: remove hardcoded `ws://192.168.1.236/ws`
-  (line 49), add `--host/--url`/`--port`, support the C1 `?key=`, wire into `just`
-  and the deploy dashboard "Tune" sub-panel. Effort: S.
+- [ ] P2: Promote the tuner to first-class. Done 2026-10-23: `owb-tune` (an
+  `owb-host-sim` bin) replaces `tune.py`, with no hardcoded IP, `--host/--url/--port`,
+  the C1 `?key=`, and a 150 ms keepalive (tune.py sent each motion command once,
+  so the 300 ms deadman cut every timed run short). Remaining: wire into `just` and
+  the deploy dashboard "Tune" sub-panel. Effort: S.
 - [ ] P3: Unify the serial monitor (today `espflash --monitor` vs `screen` in
   `scripts/monitor.sh` diverge); consider `cargo-espflash` for build+flash+monitor.
 - [ ] P3: If the bash layer keeps growing, absorb `owb-run.sh` + maker plugins into a
