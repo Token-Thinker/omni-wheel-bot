@@ -735,7 +735,11 @@ async fn usb_command_task(usb: UsbSerialJtag<'static, Blocking>) -> ! {
                                         esp_println::println!("[USB] command accepted");
                                     }
                                 }
-                                Err(_) => esp_println::println!("[USB] unrecognized command"),
+                                Err(_) => esp_println::println!(
+                                    "[USB] unrecognized command ({} bytes): {}",
+                                    len,
+                                    text
+                                ),
                             },
                             Err(_) => esp_println::println!("[USB] non-utf8 input ignored"),
                         }
