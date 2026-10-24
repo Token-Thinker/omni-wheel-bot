@@ -159,6 +159,15 @@ impl CommandExecutor for RealBoardRuntime {
                     self.set_stiction_kick(ms, boost);
                     Ok(CommandReply::Ok)
                 }
+                I2CCommand::DriveLoop {
+                    closed_loop,
+                    pwm_stagger,
+                    trace,
+                    max_duty,
+                } => {
+                    self.set_drive_loop(closed_loop, pwm_stagger, trace, max_duty);
+                    Ok(CommandReply::Ok)
+                }
                 I2CCommand::Enable => {
                     self.set_enabled(true);
                     if let Some(imu) = self.imu.as_mut() {
@@ -275,7 +284,7 @@ impl CommandExecutor for RealBoardRuntime {
         }
 
         let plan = self.plan_from_state();
-        self.apply_drive_plan(plan);
+        self.apply_planned(plan);
         Ok(())
     }
 }

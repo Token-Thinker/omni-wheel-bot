@@ -24,6 +24,62 @@ use crate::profile::{MotorBridgeMode, MotorPins};
 // joystick limits motor authority in software instead of changing PWM rate.
 const MOTOR_PWM_FREQ_KHZ: u32 = 20;
 
+/// When set, W2's drive pulse is right-aligned in the PWM period instead of
+/// sharing W1's left-aligned edge. Both channels run off LEDC Timer0, so by
+/// default both motors switch on at the same instant every period and the
+/// motor rail sees the summed inrush; staggering them halves the peak at duty
+/// <= 50% and minimises overlap above it.
+#[cfg(feature = "real-executors")]
+static PWM_STAGGER: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+#[cfg(feature = "real-executors")]
+pub(super) fn set_pwm_stagger(enabled: bool) {
+    PWM_STAGGER.store(enabled, core::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(feature = "real-executors")]
+pub(super) fn pwm_stagger() -> bool { PWM_STAGGER.load(core::sync::atomic::Ordering::Relaxed) }
+
+/// Read back W2's (LEDC channel 1) HPOINT so a bench log can confirm the
+/// stagger write landed; there is no other way to see it without a scope.
+#[cfg(feature = "real-executors")]
+pub(super) fn staggered_channel_hpoint() -> u32 {
+    let reg = (LEDC_BASE + LEDC_CH_STRIDE + LEDC_CH_HPOINT_OFFSET) as *const u32;
+    // SAFETY: plain read of a LEDC status/config register; no side effects.
+    unsafe { core::ptr::read_volatile(reg) & 0x3fff }
+}
+
+/// LEDC register block on the ESP32-S3 (TRM ch. 36). esp-hal keeps the PAC
+/// crate-private and always programs HPOINT = 0, so the stagger writes the
+/// per-channel HPOINT register directly.
+#[cfg(feature = "real-executors")]
+const LEDC_BASE: usize = 0x6001_9000;
+#[cfg(feature = "real-executors")]
+const LEDC_CH_STRIDE: usize = 0x14;
+#[cfg(feature = "real-executors")]
+const LEDC_CH_HPOINT_OFFSET: usize = 0x04;
+/// Counter steps per period at `Duty8Bit`.
+#[cfg(feature = "real-executors")]
+const LEDC_PERIOD_STEPS: u32 = 256;
+
+/// HPOINT that right-aligns a pulse of `duty_pct`, or 0 (left-aligned) when
+/// staggering is off or the pulse is fully off/on.
+///
+/// The output goes high at HPOINT and low at HPOINT + duty. A low point of
+/// 256 never matches the 8-bit counter and would latch the output high, so the
+/// pulse ends one step early (at 255) -- 0.4% of a period.
+#[cfg(feature = "real-executors")]
+fn right_aligned_hpoint(duty_pct: u8) -> u32 {
+    // Same rounding esp-hal's `set_duty` uses, so the pulse width is unchanged.
+    let duty = LEDC_PERIOD_STEPS * u32::from(duty_pct.min(100)) / 100;
+    if duty == 0 || duty >= LEDC_PERIOD_STEPS - 1 {
+        0
+    }
+    else {
+        LEDC_PERIOD_STEPS - 1 - duty
+    }
+}
+
 #[cfg(feature = "real-executors")]
 type LedcLowSpeedTimer = LedcTimer<'static, LowSpeed>;
 #[cfg(feature = "real-executors")]
@@ -48,6 +104,8 @@ pub(super) struct PhasePwmBridge {
     mode: MotorBridgeMode,
     phase: Output<'static>,
     drive: &'static mut LedcLowSpeedChannel,
+    /// LEDC channel number when this bridge takes part in `PWM_STAGGER`.
+    stagger_channel: Option<u8>,
 }
 
 #[cfg(feature = "real-executors")]
@@ -333,6 +391,7 @@ impl PhasePwmBridge {
                 mode: pins.mode,
                 phase,
                 drive,
+                stagger_channel: None,
             })
         }
         else {
@@ -357,6 +416,7 @@ impl PhasePwmBridge {
                 mode: pins.mode,
                 phase,
                 drive,
+                stagger_channel: Some(ledc_channel::Number::Channel1 as u8),
             })
         }
         else {
@@ -381,6 +441,7 @@ impl PhasePwmBridge {
                 mode: pins.mode,
                 phase,
                 drive,
+                stagger_channel: None,
             })
         }
         else {
@@ -447,7 +508,23 @@ impl PhasePwmBridge {
         &mut self,
         duty_pct: u8,
     ) {
-        let _ = self.drive.set_duty(duty_pct.min(100));
+        let duty_pct = duty_pct.min(100);
+        if let Some(channel) = self.stagger_channel {
+            let hpoint = if pwm_stagger() {
+                right_aligned_hpoint(duty_pct)
+            }
+            else {
+                0
+            };
+            let reg = (LEDC_BASE + usize::from(channel) * LEDC_CH_STRIDE + LEDC_CH_HPOINT_OFFSET)
+                as *mut u32;
+            // SAFETY: CHn_HPOINT is a plain R/W register owned by this
+            // channel, which this bridge holds exclusively. It is latched by
+            // the PARA_UP that `set_duty` issues right after, so the new
+            // HPOINT and duty take effect in the same PWM period.
+            unsafe { core::ptr::write_volatile(reg, hpoint & 0x3fff) };
+        }
+        let _ = self.drive.set_duty(duty_pct);
     }
 
     fn apply(

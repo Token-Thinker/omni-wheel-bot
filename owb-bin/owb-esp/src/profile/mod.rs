@@ -118,9 +118,13 @@ pub struct BoardProfile {
     pub default_wheel_trim: [f32; 3],
     /// Minimum effective forward speed-norm magnitude pushed to the motors
     /// when the operator commands any forward motion above the deadband.
-    /// Designed to bypass the static-friction floor measured on this chassis
-    /// (~0.55 of full PWM). 0.0 disables the floor.
+    /// Designed to bypass the static-friction floor measured on this chassis.
+    /// 0.0 disables the floor.
     pub min_forward_speed_norm: f32,
+    /// Ceiling on the duty the drive path sends to any wheel, applied after
+    /// trim. Commands above it clamp rather than scale, so the stiction floor
+    /// keeps its meaning. 1.0 = no cap.
+    pub max_drive_duty: f32,
     /// Duration in milliseconds of an additive PWM "kick" applied when the
     /// operator transitions from idle to commanded forward motion (or flips
     /// the direction of travel). Designed to break the chassis out of static
@@ -222,6 +226,7 @@ pub const XIAO_SEEDSTUDIO_SENSE_CAM: BoardProfile = BoardProfile {
     execution_plan: EXEC_PLAN_S3_DUAL,
     default_wheel_trim: [1.0, 1.0, 1.0],
     min_forward_speed_norm: 0.0,
+    max_drive_duty: 1.0,
     stiction_kick_ms: 0,
     stiction_kick_boost_norm: 0.0,
     wheel_phase_invert: [false, false, false],
@@ -279,6 +284,7 @@ pub const ESP32_S3_DEVKITC_1_N32R16: BoardProfile = BoardProfile {
     execution_plan: EXEC_PLAN_S3_DUAL,
     default_wheel_trim: [1.0, 1.0, 1.0],
     min_forward_speed_norm: 0.0,
+    max_drive_duty: 1.0,
     stiction_kick_ms: 0,
     stiction_kick_boost_norm: 0.0,
     wheel_phase_invert: [false, false, false],
@@ -353,6 +359,7 @@ pub const OWB_ESP32S3_V1: BoardProfile = BoardProfile {
     execution_plan: EXEC_PLAN_S3_DUAL,
     default_wheel_trim: [1.0, 1.0, 1.0],
     min_forward_speed_norm: 0.0,
+    max_drive_duty: 1.0,
     stiction_kick_ms: 0,
     stiction_kick_boost_norm: 0.0,
     wheel_phase_invert: [false, false, false],
@@ -379,7 +386,15 @@ pub const OWB_ESP32S3_V1_ALPHA: BoardProfile = BoardProfile {
     // in both directions on this chassis; next board should still route
     // motor PHASE off any strapping pin as a defensive measure.
     default_wheel_trim: [0.93, 1.0, 1.0],
-    min_forward_speed_norm: 0.55,
+    // Measured breakaway is 0.40 duty on both wheels (`hil-check
+    // --characterize`, 2026-10-23); 0.05 of margin. The old 0.55 dated from
+    // when W1 was jammed by a screw.
+    min_forward_speed_norm: 0.45,
+    // Two wheels together run ~4000 c/s at 0.8 but drop to ~1600 at >= 0.9,
+    // and a single wheel at 1.0 runs ~35% slower than at 0.95 -- most likely
+    // the 1S LiPo supply sagging under load. Nothing above 0.8 is faster with
+    // both wheels driving, so cap there.
+    max_drive_duty: 0.8,
     // Startup PWM boost so cold-start commands above the deadband but near the
     // stiction floor still break the wheels free reliably. Pulse expires after
     // ~120 ms and the runtime reverts to the operator's commanded speed.
@@ -475,6 +490,7 @@ pub const OWB_ESP32S3_V2: BoardProfile = BoardProfile {
     execution_plan: EXEC_PLAN_S3_DUAL,
     default_wheel_trim: [1.0, 1.0, 1.0],
     min_forward_speed_norm: 0.0,
+    max_drive_duty: 1.0,
     stiction_kick_ms: 0,
     stiction_kick_boost_norm: 0.0,
     wheel_phase_invert: [false, false, false],
@@ -641,6 +657,16 @@ mod tests {
         assert!(OWB_ESP32S3_V1.encoder.is_some());
         assert!(OWB_ESP32S3_V1_ALPHA.encoder.is_some());
         assert!(OWB_ESP32S3_V2.encoder.is_some());
+    }
+
+    /// The stiction floor must still break the wheels free (breakaway 0.40)
+    /// and sit under the duty cap, or every low command would clamp to it.
+    #[test]
+    fn v1_alpha_floor_sits_between_breakaway_and_duty_cap() {
+        let p = OWB_ESP32S3_V1_ALPHA;
+        assert!(p.min_forward_speed_norm > 0.40);
+        assert!(p.min_forward_speed_norm < p.max_drive_duty);
+        assert!(p.max_drive_duty <= 0.8, "two wheels collapse above 0.8 duty");
     }
 
     #[test]

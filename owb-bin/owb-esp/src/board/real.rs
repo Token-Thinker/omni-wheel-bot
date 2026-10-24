@@ -19,6 +19,39 @@ use crate::profile::{BoardProfile, DriveControlMode, MotorBridgeMode, MotorPins}
 #[cfg(feature = "real-executors")]
 const ALPHA_TWO_WHEEL_FULL_YAW_DEG_S: f32 = 720.0;
 
+/// Replans closer together than this reuse the last PID output. Motion
+/// commands trigger a replan on top of the background tick, and an encoder
+/// delta over a few milliseconds is mostly quantisation noise.
+#[cfg(feature = "real-executors")]
+const PID_MIN_DT_MS: u32 = 5;
+
+/// A PID update this long after the previous one is treated as a fresh start:
+/// the encoder delta spans an unknown idle stretch, so it is discarded rather
+/// than read as a (wrong) speed.
+#[cfg(feature = "real-executors")]
+const PID_STALE_MS: u32 = 250;
+
+/// Default ceiling on the speed loop's duty. Measured on the v1-alpha bench
+/// unit (2026-10-23, `hil-check --characterize`, wheels unloaded): wheel speed
+/// rises monotonically with duty up to ~0.8, but above ~0.85 it turns
+/// bistable -- 0.99 and 1.0 sometimes run at ~60% of the 0.95 speed, and both
+/// wheels at 0.9 settle at ~40%. A loop allowed into that band reads "too
+/// slow", pushes harder, and locks itself there (observed: duty 0.95, speed
+/// 0.27). Capping below it keeps more duty meaning more speed.
+#[cfg(feature = "real-executors")]
+const DEFAULT_CLOSED_LOOP_MAX_DUTY: f32 = 0.8;
+
+/// Integrator clamp for the wheel PIDs. With ki = 0.2 this lets the I term
+/// contribute up to 0.4 duty -- enough to carry a low target through the
+/// stiction band (breakaway is ~0.40 duty on this unit), which the old 0.5
+/// clamp (0.1 duty) could not.
+#[cfg(feature = "real-executors")]
+const PID_INTEGRAL_LIMIT: f32 = 2.0;
+
+/// With tracing on, log one PID update in this many (~4 Hz at the 50 ms tick).
+#[cfg(feature = "real-executors")]
+const PID_TRACE_EVERY: u8 = 5;
+
 #[cfg(feature = "real-executors")]
 use super::{
     AddressableLedDriver,
@@ -56,6 +89,8 @@ pub struct RealBoardRuntime {
     wheel_trim: [f32; 3],
     wheel_phase_invert: [bool; 3],
     min_forward_speed_norm: f32,
+    /// Per-board drive duty ceiling (`BoardProfile::max_drive_duty`).
+    max_drive_duty: f32,
     /// Pulse duration in ms applied on idle→forward transitions to break
     /// static friction. `0` disables the kick.
     stiction_kick_ms: u16,
@@ -73,6 +108,20 @@ pub struct RealBoardRuntime {
     /// Timestamp of the last *active* straightness tick, for dt normalisation.
     heading_hold_last_ms: u32,
     pid_probe_targets: Option<[f32; 3]>,
+    /// Run the encoder PID speed loop in two-wheel mode. Off by default:
+    /// open-loop is what the alpha joystick feel was tuned against.
+    closed_loop: bool,
+    /// Timestamp of the last PID update; `None` until the loop is primed.
+    pid_last_ms: Option<u32>,
+    /// Signed physical duty per wheel computed by `plan_from_state` and
+    /// consumed by `apply_planned`. `None` means "drive the plan's on/off
+    /// outputs".
+    planned_duty: Option<[f32; 3]>,
+    /// Emit the speed-loop terms at info level every `PID_TRACE_EVERY` updates.
+    pid_trace: bool,
+    pid_trace_count: u8,
+    pid_last_dt_ms: u32,
+    closed_loop_max_duty: f32,
     sleep: Option<Output<'static>>,
     status_led: Option<GpioStatusLed>,
     addressable_led: Option<AddressableLedDriver>,
@@ -254,7 +303,7 @@ impl RealBoardRuntime {
                 drive.pid.kp,
                 drive.pid.ki,
                 drive.pid.kd,
-                0.5,
+                PID_INTEGRAL_LIMIT,
                 1.0,
             ),
             enabled: false,
@@ -268,6 +317,7 @@ impl RealBoardRuntime {
             wheel_trim: profile.default_wheel_trim,
             wheel_phase_invert: profile.wheel_phase_invert,
             min_forward_speed_norm: profile.min_forward_speed_norm,
+            max_drive_duty: profile.max_drive_duty.clamp(0.1, 1.0),
             stiction_kick_ms: profile.stiction_kick_ms,
             stiction_kick_boost_norm: profile.stiction_kick_boost_norm,
             stiction_kick_active_until_ms: None,
@@ -278,6 +328,13 @@ impl RealBoardRuntime {
             heading_hold_baseline_raw: [0; 3],
             heading_hold_last_ms: 0,
             pid_probe_targets: None,
+            closed_loop: false,
+            pid_last_ms: None,
+            planned_duty: None,
+            pid_trace: false,
+            pid_trace_count: 0,
+            pid_last_dt_ms: 0,
+            closed_loop_max_duty: DEFAULT_CLOSED_LOOP_MAX_DUTY,
             sleep,
             status_led: profile
                 .status_led
@@ -445,6 +502,7 @@ impl RealBoardRuntime {
             self.last_drive_targets = [0.0; 3];
             self.last_pid_output = [0.0; 3];
             self.pid_probe_targets = None;
+            self.pid_last_ms = None;
             self.stiction_kick_active_until_ms = None;
             self.last_speed_norm_sign = 0.0;
         }
@@ -452,10 +510,11 @@ impl RealBoardRuntime {
             self.plan_from_state()
         }
         else {
+            self.planned_duty = None;
             TriWheelDrivePlan::stopped(false)
         };
         self.log_drive_plan("enable_command", plan);
-        self.apply_drive_plan(plan);
+        self.apply_planned(plan);
         info!("real runtime {:?}: enable={enabled}", self.runtime);
     }
 
@@ -574,7 +633,7 @@ impl RealBoardRuntime {
         self.pid_probe_targets = None;
         let plan = self.plan_from_state();
         self.log_drive_plan("motion_command", plan);
-        self.apply_drive_plan(plan);
+        self.apply_planned(plan);
         debug!(
             "real runtime {:?}: dir={:.1} speed={:.2} yaw={:.1} orient={:.1}",
             self.runtime,
@@ -597,7 +656,7 @@ impl RealBoardRuntime {
         self.pid_probe_targets = None;
         let plan = self.plan_from_state();
         self.log_drive_plan("translation_command", plan);
-        self.apply_drive_plan(plan);
+        self.apply_planned(plan);
         debug!(
             "real runtime {:?}: dir={:.1} speed={:.2} yaw={:.1} orient={:.1}",
             self.runtime,
@@ -620,7 +679,7 @@ impl RealBoardRuntime {
         self.pid_probe_targets = None;
         let plan = self.plan_from_state();
         self.log_drive_plan("yaw_command", plan);
-        self.apply_drive_plan(plan);
+        self.apply_planned(plan);
         debug!(
             "real runtime {:?}: dir={:.1} speed={:.2} yaw={:.1} orient={:.1}",
             self.runtime,
@@ -740,10 +799,11 @@ impl RealBoardRuntime {
         self.last_drive_targets = [0.0; 3];
         self.last_pid_output = [0.0; 3];
         self.pid_probe_targets = if self.enabled { Some(targets) } else { None };
+        self.pid_last_ms = None;
 
         let plan = self.plan_from_state();
         self.log_drive_plan("pid_probe_speed_command", plan);
-        self.apply_drive_plan(plan);
+        self.apply_planned(plan);
         info!(
             "real runtime {:?}: pid_probe_speed wheel={} speed_norm={:.2}",
             self.runtime, index, speed
@@ -799,24 +859,92 @@ impl RealBoardRuntime {
         }
     }
 
+    /// Sign that maps a logical wheel speed onto the physical bridge (and
+    /// encoder) direction for wheels mounted reversed.
+    fn phase_sign(
+        &self,
+        index: usize,
+    ) -> f32 {
+        if self.wheel_phase_invert[index] {
+            -1.0
+        }
+        else {
+            1.0
+        }
+    }
+
+    /// Encoder PID speed loop. `targets` are logical wheel speeds (fractions
+    /// of `max_wheel_rad_s`, before the per-wheel phase invert). The result is
+    /// a signed physical duty per wheel, left in `planned_duty`.
+    ///
+    /// Duty is feedforward (`target * trim`: on these motors duty and
+    /// normalised speed track each other closely) plus the PID correction, so
+    /// the loop only closes the gap instead of holding the whole speed on an
+    /// integrator that is clamped to a small share of full scale.
     fn pid_plan_from_targets(
         &mut self,
         targets: [f32; 3],
     ) -> TriWheelDrivePlan {
         let targets = self.mask_targets(targets);
-        let delta_counts = self.read_encoder_delta_counts();
-        self.last_encoder_delta_counts = delta_counts;
-        let pid_output = self.pid.update_from_counts(
-            targets,
-            delta_counts,
-            f32::from(self.drive.control_dt_ms) * 0.001,
-        );
-        self.last_pid_output = self.mask_targets(pid_output);
+        let physical = [0, 1, 2].map(|index| targets[index] * self.phase_sign(index));
+        let now = Self::now_ms();
+        match self.pid_last_ms.map(|last| now.wrapping_sub(last)) {
+            Some(elapsed_ms) if elapsed_ms < PID_MIN_DT_MS => {}
+            Some(elapsed_ms) if elapsed_ms < PID_STALE_MS => {
+                let delta_counts = self.read_encoder_delta_counts();
+                self.last_encoder_delta_counts = delta_counts;
+                let output = self.pid.update_from_counts(
+                    physical,
+                    delta_counts,
+                    elapsed_ms as f32 * 0.001,
+                );
+                self.last_pid_output = self.mask_targets(output);
+                self.pid_last_ms = Some(now);
+                self.pid_last_dt_ms = elapsed_ms;
+            }
+            // Unprimed, or idle long enough that the delta spans an unknown
+            // stretch: rebase the encoders and run on feedforward this tick.
+            _ => {
+                self.pid.reset();
+                let _ = self.read_encoder_delta_counts();
+                self.last_encoder_delta_counts = [0; 3];
+                self.last_pid_output = [0.0; 3];
+                self.pid_last_ms = Some(now);
+            }
+        }
+
+        let mut duty = [0.0f32; 3];
+        for index in 0..3 {
+            if targets[index].abs() <= self.drive.motor_deadband_norm {
+                // A stopped wheel must not wind its integrator up against
+                // the coast-down and lurch backwards on the next start.
+                self.pid.reset_wheel(index);
+                self.last_pid_output[index] = 0.0;
+                continue;
+            }
+            let feedforward = physical[index] * self.wheel_trim[index];
+            let max = self.closed_loop_max_duty.min(self.max_drive_duty);
+            duty[index] = (feedforward + self.last_pid_output[index]).clamp(-max, max);
+        }
         let terms = self.pid.last_terms();
 
-        debug!(
-            "real runtime {:?}: pid counts=[{},{},{}] target=[{:.2},{:.2},{:.2}] measured=[{:.2},{:.2},{:.2}] out=[{:.2},{:.2},{:.2}]",
+        let level = if self.pid_trace {
+            self.pid_trace_count = self.pid_trace_count.wrapping_add(1);
+            if self.pid_trace_count % PID_TRACE_EVERY == 0 {
+                log::Level::Info
+            }
+            else {
+                log::Level::Trace
+            }
+        }
+        else {
+            log::Level::Debug
+        };
+        log::log!(
+            level,
+            "real runtime {:?}: pid dt={}ms counts=[{},{},{}] target=[{:.2},{:.2},{:.2}] measured=[{:.2},{:.2},{:.2}] out=[{:.2},{:.2},{:.2}] duty=[{:.2},{:.2},{:.2}]",
             self.runtime,
+            self.pid_last_dt_ms,
             self.last_encoder_delta_counts[0],
             self.last_encoder_delta_counts[1],
             self.last_encoder_delta_counts[2],
@@ -828,37 +956,34 @@ impl RealBoardRuntime {
             terms[2].measured_norm,
             self.last_pid_output[0],
             self.last_pid_output[1],
-            self.last_pid_output[2]
+            self.last_pid_output[2],
+            duty[0],
+            duty[1],
+            duty[2]
         );
 
+        self.planned_duty = Some(duty);
         self.mask_plan(TriWheelDrivePlan {
             enabled: true,
-            wheels: self.last_pid_output.map(|speed| {
-                if speed.abs() <= self.drive.motor_deadband_norm {
-                    HalfBridgeOutput {
-                        phase_high: false,
-                        drive_high: false,
-                    }
-                }
-                else {
-                    HalfBridgeOutput {
-                        phase_high: speed.is_sign_positive(),
-                        drive_high: true,
-                    }
-                }
+            wheels: duty.map(|speed| HalfBridgeOutput {
+                phase_high: speed.is_sign_positive(),
+                drive_high: speed != 0.0,
             }),
         })
     }
 
     pub(super) fn plan_from_state(&mut self) -> TriWheelDrivePlan {
+        self.planned_duty = None;
         if !self.enabled {
             self.last_encoder_delta_counts = [0; 3];
             self.last_drive_targets = [0.0; 3];
             self.last_pid_output = [0.0; 3];
+            self.pid_last_ms = None;
             return TriWheelDrivePlan::stopped(false);
         }
 
         if let Some(targets) = self.pid_probe_targets {
+            self.last_drive_targets = self.mask_targets(targets);
             return self.pid_plan_from_targets(targets);
         }
 
@@ -880,6 +1005,19 @@ impl RealBoardRuntime {
         if self.drive_mode == DriveControlMode::TwoWheelFront {
             // Heading-hold reads encoders non-destructively so /ws read_encoders still works.
             self.apply_heading_hold_correction();
+            if self.closed_loop {
+                return self.pid_plan_from_targets(self.last_drive_targets);
+            }
+            // Open loop: direct signed PWM keeps W1/W2 proportional to the
+            // joystick target. Phase invert goes on BEFORE trim scaling so the
+            // bridge sees a sign matching the desired physical rotation.
+            self.pid_last_ms = None;
+            let max = self.max_drive_duty;
+            let duty = [0, 1, 2].map(|index| {
+                (self.last_drive_targets[index] * self.wheel_trim[index]).clamp(-max, max)
+                    * self.phase_sign(index)
+            });
+            self.planned_duty = Some(self.mask_targets(duty));
             return self.mask_plan(TriWheelDrivePlan {
                 enabled: true,
                 wheels: self.last_drive_targets.map(|speed| {
@@ -891,6 +1029,48 @@ impl RealBoardRuntime {
             });
         }
         self.pid_plan_from_targets(targets)
+    }
+
+    pub(super) fn set_drive_loop(
+        &mut self,
+        closed_loop: Option<bool>,
+        pwm_stagger: Option<bool>,
+        trace: Option<bool>,
+        max_duty: Option<f32>,
+    ) {
+        if let Some(trace) = trace {
+            self.pid_trace = trace;
+        }
+        if let Some(max_duty) = max_duty.filter(|value| value.is_finite()) {
+            self.closed_loop_max_duty = max_duty.clamp(0.1, 1.0);
+        }
+        if let Some(closed_loop) = closed_loop {
+            self.closed_loop = closed_loop;
+            self.pid.reset();
+            self.pid_last_ms = None;
+        }
+        if let Some(stagger) = pwm_stagger {
+            super::bridges::set_pwm_stagger(stagger);
+        }
+        info!(
+            "real runtime {:?}: drive_loop closed_loop={} pwm_stagger={} trace={} max_duty={:.2}",
+            self.runtime,
+            self.closed_loop,
+            super::bridges::pwm_stagger(),
+            self.pid_trace,
+            self.closed_loop_max_duty
+        );
+        // Re-drive immediately so a stagger change lands on the live duty
+        // instead of waiting for the next command or tick.
+        if self.enabled {
+            let plan = self.plan_from_state();
+            self.apply_planned(plan);
+            info!(
+                "real runtime {:?}: drive_loop W2 hpoint={}",
+                self.runtime,
+                super::bridges::staggered_channel_hpoint()
+            );
+        }
     }
 
     fn read_encoder_delta_counts(&mut self) -> [i32; 3] {
@@ -1088,32 +1268,34 @@ impl RealBoardRuntime {
         &mut self,
         plan: TriWheelDrivePlan,
     ) {
+        self.drive_outputs(plan, None);
+    }
+
+    /// Apply a plan returned by `plan_from_state`, including the signed duty
+    /// it computed. Plans built by hand (stops, probes) go through
+    /// `apply_drive_plan` so a stale duty can never leak into them.
+    pub(super) fn apply_planned(
+        &mut self,
+        plan: TriWheelDrivePlan,
+    ) {
+        let duty = self.planned_duty.take();
+        self.drive_outputs(plan, duty);
+    }
+
+    fn drive_outputs(
+        &mut self,
+        plan: TriWheelDrivePlan,
+        duty: Option<[f32; 3]>,
+    ) {
         let plan = self.mask_plan(plan);
+        let duty = duty.map(|duty| self.mask_targets(duty));
         if self.runtime == BoardRuntimeKind::OwbS3V1 {
             if plan.enabled {
                 if let Some(motors) = self.motors.as_mut() {
                     for (index, bridge) in motors.iter_mut().enumerate() {
-                        let output = plan.wheels[index];
-                        // Alpha two-wheel mode is open-loop until encoder PID signs and gains are calibrated.
-                        // Direct signed PWM keeps W1/W2 proportional to the joystick target.
-                        if self.drive_mode == DriveControlMode::TwoWheelFront && self.enabled {
-                            // Apply per-wheel sign flip BEFORE trim scaling so the
-                            // PWM bridge sees a signed speed whose sign matches
-                            // the desired physical direction of rotation.
-                            let phase_sign: f32 = if self.wheel_phase_invert[index] {
-                                -1.0
-                            }
-                            else {
-                                1.0
-                            };
-                            bridge.apply_signed_norm(
-                                self.last_drive_targets[index]
-                                    * self.wheel_trim[index]
-                                    * phase_sign,
-                            );
-                        }
-                        else {
-                            bridge.apply(output);
+                        match duty {
+                            Some(duty) => bridge.apply_signed_norm(duty[index]),
+                            None => bridge.apply(plan.wheels[index]),
                         }
                     }
                 }
@@ -1144,8 +1326,11 @@ impl RealBoardRuntime {
         }
 
         if let Some(motors) = self.motors.as_mut() {
-            for (bridge, output) in motors.iter_mut().zip(plan.wheels.iter().copied()) {
-                bridge.apply(output);
+            for (index, bridge) in motors.iter_mut().enumerate() {
+                match duty {
+                    Some(duty) if plan.enabled => bridge.apply_signed_norm(duty[index]),
+                    _ => bridge.apply(plan.wheels[index]),
+                }
             }
         }
     }

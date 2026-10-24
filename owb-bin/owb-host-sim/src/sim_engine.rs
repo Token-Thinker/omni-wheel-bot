@@ -22,7 +22,7 @@
 //! Configurable knobs:
 //! - `slip_ratio` per wheel (0.0 = no slip, 0.5 = 50% commanded velocity lost)
 //! - `stiction_threshold_norm` (commanded magnitude below which the wheel does
-//!   not move). Default 0.55 matches the v1-alpha profile.
+//!   not move). Default 0.45 matches the v1-alpha profile.
 //! - `wheel_trim` multipliers (mirrors the firmware `WheelTrim` command).
 //! - `heading_hold` (mirrors the firmware `HeadingHold` straightness loop).
 
@@ -74,7 +74,7 @@ const ENCODER_COUNTS_PER_M: f32 =
 /// Wheel actuator response (first-order lag). Higher = snappier.
 const WHEEL_RESPONSE_PER_S: f32 = 6.0;
 /// Default stiction threshold baked into the v1-alpha profile.
-const DEFAULT_STICTION: f32 = 0.55;
+const DEFAULT_STICTION: f32 = 0.45;
 /// Default per-wheel slip ratios.
 const DEFAULT_SLIP: [f32; 2] = [0.0, 0.0];
 /// History buffer capacity (10 Hz * 60 s).
@@ -1034,6 +1034,9 @@ mod tests {
     #[test]
     fn omni_pure_yaw_spins_in_place() {
         let mut e = SimEngine::new();
+        // Pin the knob the 0.5 rad threshold was written against, so a change
+        // to the profile default does not quietly move this test's goalposts.
+        e.set_stiction(0.55);
         e.set_drive_mode(SimDriveMode::TriWheelOmni);
         e.set_translate(0.0, 0.0);
         e.set_yaw(MAX_YAW_RATE_DEG_S);

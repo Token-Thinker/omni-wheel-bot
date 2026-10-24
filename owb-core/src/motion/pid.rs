@@ -136,6 +136,21 @@ impl TriWheelPidController {
         self.last_terms = [WheelPidTerms::default(); 3];
     }
 
+    /// Clear one wheel's integrator and derivative history, leaving the other
+    /// wheels' loops untouched. Used when a single wheel is commanded to stop
+    /// so its integrator does not wind up against the coast-down.
+    pub fn reset_wheel(
+        &mut self,
+        index: usize,
+    ) {
+        if let Some(controller) = self.controllers.get_mut(index) {
+            controller.reset();
+        }
+        if let Some(terms) = self.last_terms.get_mut(index) {
+            *terms = WheelPidTerms::default();
+        }
+    }
+
     pub fn update_from_counts(
         &mut self,
         target_norm: [f32; 3],
@@ -238,6 +253,18 @@ mod tests {
         pid.reset();
         let out = pid.update(0.0, 0.0, 0.1);
         assert!(out.abs() < 1e-6);
+    }
+
+    #[test]
+    fn tri_wheel_reset_wheel_only_clears_that_wheel() {
+        let mut pid = TriWheelPidController::new(600.0, 50.0, 0.0, 1.0, 0.0, 10.0, 10.0);
+        for _ in 0..5 {
+            pid.update_from_counts([0.5, 0.5, 0.0], [0, 0, 0], 0.05);
+        }
+        pid.reset_wheel(0);
+        let out = pid.update_from_counts([0.0, 0.0, 0.0], [0, 0, 0], 0.05);
+        assert!(out[0].abs() < 1e-6, "wheel 0 integrator survived reset: {}", out[0]);
+        assert!(out[1] > 0.0, "wheel 1 integrator was cleared too: {}", out[1]);
     }
 
     #[test]
