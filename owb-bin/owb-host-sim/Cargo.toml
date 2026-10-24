@@ -2,6 +2,8 @@
 name = "owb-host-sim"
 version = "0.1.0"
 edition = "2021"
+# Two bins live here; keep bare `cargo run -p owb-host-sim` resolving to the server.
+default-run = "owb-host-sim"
 
 # Bring-up assertion harness. A separate binary so the check tool does not
 # drag in the sim server's axum/tower stack at runtime.
