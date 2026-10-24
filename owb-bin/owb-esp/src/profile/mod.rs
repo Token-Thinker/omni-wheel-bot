@@ -666,7 +666,10 @@ mod tests {
         let p = OWB_ESP32S3_V1_ALPHA;
         assert!(p.min_forward_speed_norm > 0.40);
         assert!(p.min_forward_speed_norm < p.max_drive_duty);
-        assert!(p.max_drive_duty <= 0.8, "two wheels collapse above 0.8 duty");
+        assert!(
+            p.max_drive_duty <= 0.8,
+            "two wheels collapse above 0.8 duty"
+        );
     }
 
     #[test]

@@ -263,8 +263,16 @@ mod tests {
         }
         pid.reset_wheel(0);
         let out = pid.update_from_counts([0.0, 0.0, 0.0], [0, 0, 0], 0.05);
-        assert!(out[0].abs() < 1e-6, "wheel 0 integrator survived reset: {}", out[0]);
-        assert!(out[1] > 0.0, "wheel 1 integrator was cleared too: {}", out[1]);
+        assert!(
+            out[0].abs() < 1e-6,
+            "wheel 0 integrator survived reset: {}",
+            out[0]
+        );
+        assert!(
+            out[1] > 0.0,
+            "wheel 1 integrator was cleared too: {}",
+            out[1]
+        );
     }
 
     #[test]

@@ -893,11 +893,9 @@ impl RealBoardRuntime {
             Some(elapsed_ms) if elapsed_ms < PID_STALE_MS => {
                 let delta_counts = self.read_encoder_delta_counts();
                 self.last_encoder_delta_counts = delta_counts;
-                let output = self.pid.update_from_counts(
-                    physical,
-                    delta_counts,
-                    elapsed_ms as f32 * 0.001,
-                );
+                let output =
+                    self.pid
+                        .update_from_counts(physical, delta_counts, elapsed_ms as f32 * 0.001);
                 self.last_pid_output = self.mask_targets(output);
                 self.pid_last_ms = Some(now);
                 self.pid_last_dt_ms = elapsed_ms;
