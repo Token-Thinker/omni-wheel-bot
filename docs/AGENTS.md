@@ -3,21 +3,18 @@
 ## Project Structure & Modules
 - `owb-core/`: no-std library crate with drivers and utils; tests in `owb-core/tests/`.
 - `owb-bin/owb-esp/`: ESP32-S3 firmware binary; board aliases in `.cargo/config.toml`. ESP32-S3 board behavior is defined by `owb-bin/owb-esp/src/profile/mod.rs` profiles (camera, motor, and IO behavior), with `owb-esp32s3-v2` as the default profile.
-- Top-level workspace managed by `Cargo.toml`; `scripts/run_app.sh` is the build/flash/monitor entry point over the modular helpers under `scripts/` (also exposed via `justfile` recipes).
+- Top-level workspace managed by `Cargo.toml`; `cargo xtask` (crate `xtask/`) is the build/flash/monitor entry point, with `./owb` running it inside the idf-rust Docker image on machines without Rust (also exposed via `justfile` recipes).
 
 ## Build, Test, and Development
 - Build core crate: `cargo build -p owb-core`.
 - Test core crate: `cargo test -p owb-core` (uses `embedded-hal-mock`).
-- Format/lint: `cargo fmt -- --check` and `cargo clippy --all -- -D warnings`.
-- Run application (`scripts/run_app.sh`):
-  - Make executable: `chmod +x scripts/run_app.sh`
-  - Guided flow: `./scripts/run_app.sh` prompts for maker, board, binary; ESP32-S3 builds also prompt for an IO profile before Wi‑Fi.
-  - List/probe: `./scripts/run_app.sh --list` and `./scripts/run_app.sh --probe` (or `--probe-board`).
-  - Non‑interactive flags: `--maker/--board/--bin/--port`, `--ssid/--password`, `--use-test-network` (reads `OWB_WIFI_SSID`/`OWB_WIFI_PASSWORD` from env), `--build`, `--flash`, `--monitor`, `--no-attach-monitor`, `--real-executors`, `--last`, `--tui/--no-tui`, `--dry-run`.
+- Format/lint: `cargo xtask ci check` (pinned nightly rustfmt, since `rustfmt.toml` uses nightly-only options, plus clippy `-D warnings` and tests).
+- Build/flash/monitor (`cargo xtask`, or `./owb` without host Rust):
+  - `./owb build --profile <io-profile> [--real-executors] [--hil-low-mode] [--force-softap]`
+  - `./owb flash --port /dev/ttyACM0 [--no-monitor]`, `./owb build-flash ...`, `./owb monitor --port ... [--reset]`
+  - `./owb probe` / `./owb info` to identify boards and list profiles; `./owb ci check` for the CI host checks; `cargo xtask e2e` for the host-sim smoke test.
+  - `--last` reuses `.owb_last_target`; `--dry-run` prints the docker/espflash commands. Without a TTY a missing choice errors out naming the flag.
   - Shortcuts via `justfile`: `just build`, `just flash`, `just monitor`, `just probe`.
-  - ESP (Docker): prints rustc/toolchain details from container; flashing via `espflash`.
-  - Host‑sim: prints local rustc/toolchain details; no flashing.
-  - Interactive QoL: before flashing choose to change target or exit; after run choose another board or exit.
 
 ## Coding Style & Naming
 - Language: Rust 2021; MSRV follows `owb-core/Cargo.toml` (`rust-version`).
@@ -38,17 +35,13 @@
 - PRs should include: clear description, linked issues, build/test notes, and (when user-facing) short screenshots/logs.
 
 ## Device & Security Notes
-- Wi‑Fi credentials are read from `OWB_WIFI_SSID`/`OWB_WIFI_PASSWORD` env vars or prompted interactively; they are never written to disk or committed. Copy `.env.example` → `.env` and fill in your network.
-- Flashing requires a serial port (e.g., `/dev/ttyUSB0`) and `espflash` installed on host for ESP targets.
-- Last target selection is saved in `.owb_last_target` (maker/board/bin only).
+- Wi‑Fi credentials are read from `SSID`/`PASSWORD` (or `OWB_WIFI_SSID`/`OWB_WIFI_PASSWORD`) env vars or prompted interactively; they are never written to disk or committed. Copy `.env.example` → `.env` and fill in your network.
+- Flashing requires a serial port (e.g., `/dev/ttyACM0`). `espflash` runs on the host, or inside the idf-rust image via `./owb`.
+- Last target selection is saved in `.owb_last_target` (profile/port; no Wi‑Fi).
 
 ## Build/Flash Architecture (quick reference)
-- Entry: `scripts/run_app.sh` — build/flash/monitor launcher (also wrapped by `justfile`).
-- Common helpers: `scripts/lib.sh` (colors, serial, target mapping).
-- Selection: `scripts/select_target.sh` (uses `scripts/ui.sh` for TUI when available).
-- Wi‑Fi: `scripts/prompt_wifi.sh` (with optional test network).
-- Build: `scripts/build.sh` dispatches to `scripts/makers/<maker>.sh` (`maker_build`).
-- Flash: `scripts/flash.sh` dispatches to `scripts/makers/<maker>.sh` (`maker_flash`).
-- Monitor: `scripts/monitor.sh` (uses `screen`).
-- Info: `scripts/info.sh` powers `--list` and `--probe`.
-- State: `scripts/state.sh` persists `.owb_last_target`.
+- Entry: `cargo xtask` (`xtask/src/main.rs`), wrapped by `./owb` and the `justfile`.
+- Firmware build: `xtask/src/firmware.rs` (docker args, features, image tag); `resolve.rs` picks profile/port; `prompt.rs` only prompts on a TTY.
+- Monitor: `xtask/src/monitor.rs` (native serial monitor; `--reset` = DTR low + RTS pulse, never `espflash reset`).
+- Probe/info: `xtask/src/probe.rs`. State: `xtask/src/state.rs` persists `.owb_last_target`.
+- Host-sim smoke test: `xtask/src/e2e.rs`.

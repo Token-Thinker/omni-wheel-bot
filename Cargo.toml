@@ -5,6 +5,7 @@ members = [
     "owb-ui",
     "owb-bin/owb-esp",
     "owb-bin/owb-host-sim",
+    "xtask",
 ]
 resolver = "2"
 
