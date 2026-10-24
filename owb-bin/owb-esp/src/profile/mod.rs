@@ -348,13 +348,17 @@ pub const OWB_ESP32S3_V1: BoardProfile = BoardProfile {
         pixels: 2,
         inverted: false,
     }),
-    width: 400,
-    height: 296,
-    jpeg_quality_qs: 0x1c,
+    // 160x120 YUV422 fits the 40 KB camera DMA buffer (38,400 bytes); the
+    // old 400x296 did not. Same frame as v1-alpha.
+    width: 160,
+    height: 120,
+    jpeg_quality_qs: 0x3c,
     frame_interval_ms: 50,
-    // Disabled during v1 drive/PID bring-up so camera SCCB does not perturb
-    // the motor-control and network crash isolation path.
-    has_camera: false,
+    // On (was off during drive/PID bring-up): the bench unit has run the
+    // camera alongside motors and PID on v1-alpha without SCCB trouble, and
+    // `snap` returns real frames. JPEG and `/stream` are still broken on that
+    // unit by a D0/D3 (GPIO11/GPIO10) solder bridge -- hardware, not this flag.
+    has_camera: true,
     camera_only: false,
     execution_plan: EXEC_PLAN_S3_DUAL,
     default_wheel_trim: [1.0, 1.0, 1.0],
@@ -684,6 +688,15 @@ mod tests {
             47
         );
         assert!(OWB_ESP32S3_V1_ALPHA.has_camera);
+    }
+
+    /// Camera frames must fit the 40 KB internal-SRAM DMA buffer in YUV422.
+    #[test]
+    fn v1_camera_frame_fits_dma_buffer() {
+        for p in [OWB_ESP32S3_V1, OWB_ESP32S3_V1_ALPHA] {
+            assert!(p.has_camera);
+            assert!(u32::from(p.width) * u32::from(p.height) * 2 <= 40 * 1024);
+        }
     }
 
     #[test]
