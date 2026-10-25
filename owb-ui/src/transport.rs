@@ -94,6 +94,10 @@ struct Inner {
     ws: Option<WebSocket>,
     reconnect_delay: u32,
     _reconnect_timer: Option<gloo_timers::callback::Timeout>,
+    /// `Date.now()` of the last frame received (or of the open). A phone that
+    /// drops Wi-Fi often leaves the socket `OPEN` with no `onclose` for
+    /// minutes; [`WsClient::close_if_stale`] uses this to notice.
+    last_rx_ms: f64,
     /// Held here, not on `WsClient`, so that `open_socket` can re-attach the
     /// `onmessage` handler on every reconnect. The reconnect path used to live
     /// in a separate copy of this wiring that had no access to the callback, so
@@ -121,6 +125,7 @@ impl WsClient {
                 ws: None,
                 reconnect_delay: RECONNECT_BASE_MS,
                 _reconnect_timer: None,
+                last_rx_ms: 0.0,
                 on_message: std::rc::Rc::from(on_message),
             })),
         }
@@ -132,6 +137,34 @@ impl WsClient {
             return;
         }
         open_socket(&self.url, self.conn_state, &self.inner);
+    }
+
+    /// Reconnect right away instead of waiting out the backoff -- for when the
+    /// page becomes visible again after the phone slept or switched networks.
+    pub fn reconnect_now(&self) {
+        {
+            let mut inner = self.inner.borrow_mut();
+            inner.reconnect_delay = RECONNECT_BASE_MS;
+            inner._reconnect_timer = None;
+        }
+        self.connect();
+    }
+
+    /// Close an `OPEN` socket that has received nothing for `stale_ms`, so the
+    /// normal `onclose` -> backoff path reconnects it. The app polls the
+    /// battery every 5 s and the bot answers, so silence means a dead link.
+    pub fn close_if_stale(
+        &self,
+        stale_ms: f64,
+    ) {
+        let stale = {
+            let inner = self.inner.borrow();
+            inner.ws.as_ref().map(|ws| ws.ready_state()) == Some(WebSocket::OPEN)
+                && js_sys::Date::now() - inner.last_rx_ms > stale_ms
+        };
+        if stale {
+            self.close();
+        }
     }
 
     pub fn is_open(&self) -> bool {
@@ -198,7 +231,9 @@ fn open_socket(
         let inner = inner.clone();
         let on_open_cb = Closure::<dyn FnMut()>::new(move || {
             conn_state.set(ConnState::Open);
-            inner.borrow_mut().reconnect_delay = RECONNECT_BASE_MS;
+            let mut inner = inner.borrow_mut();
+            inner.reconnect_delay = RECONNECT_BASE_MS;
+            inner.last_rx_ms = js_sys::Date::now();
         });
         ws.set_onopen(Some(on_open_cb.as_ref().unchecked_ref()));
         on_open_cb.forget();
@@ -232,7 +267,9 @@ fn open_socket(
     // onmessage
     {
         let on_msg = inner.borrow().on_message.clone();
+        let inner_for_rx = inner.clone();
         let on_message_cb = Closure::<dyn FnMut(MessageEvent)>::new(move |ev: MessageEvent| {
+            inner_for_rx.borrow_mut().last_rx_ms = js_sys::Date::now();
             if let Some(txt) = ev.data().as_string() {
                 on_msg(txt);
             }

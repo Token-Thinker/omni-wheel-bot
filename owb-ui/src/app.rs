@@ -6,6 +6,7 @@
 use std::rc::Rc;
 
 use leptos::prelude::*;
+use wasm_bindgen::{prelude::Closure, JsCast};
 
 use crate::{
     components::{
@@ -135,6 +136,10 @@ pub fn App() -> impl IntoView {
     let battery_label = RwSignal::new(String::from("--%"));
     let drawer_open = RwSignal::new(false);
     let camera_on = RwSignal::new(false);
+    // Whether this page last told the bot to enable its motors. The bot
+    // disables them whenever the controlling session ends, so after a
+    // reconnect this goes false and the STOP button becomes ENABLE.
+    let motors_enabled = RwSignal::new(false);
     let theme = RwSignal::new(load_theme());
     let curve = RwSignal::new(load_curve());
 
@@ -210,9 +215,19 @@ pub fn App() -> impl IntoView {
             if state == ConnState::Open && prev_state != Some(ConnState::Open) {
                 if !enabled_once.get() {
                     enabled_once.set(true);
-                    ws_for_open.send(&I2CCommand::enable());
+                    if ws_for_open.send(&I2CCommand::enable()) {
+                        motors_enabled.set(true);
+                    }
                 }
                 ws_for_open.send(&I2CCommand::read_power());
+            }
+            // The firmware disables the motors when a session ends, so any
+            // drop means the operator has to re-enable (ENABLE button). Before
+            // this, the UI kept showing STOP with no way to re-enable short of
+            // reloading the page -- after a Wi-Fi blip it simply "stopped
+            // working".
+            if state != ConnState::Open {
+                motors_enabled.set(false);
             }
             state
         });
@@ -234,6 +249,9 @@ pub fn App() -> impl IntoView {
         let conn_state_for_poll = conn_state;
         let _timer = gloo_timers::callback::Interval::new(5_000, move || {
             if conn_state_for_poll.get_untracked() == ConnState::Open {
+                // Two missed battery replies: the link is gone even if the
+                // browser still reports the socket open.
+                ws_for_poll.close_if_stale(12_000.0);
                 ws_for_poll.send(&I2CCommand::read_power());
             }
         });
@@ -242,6 +260,24 @@ pub fn App() -> impl IntoView {
     }
 
     ws.connect();
+
+    // Phones suspend timers while the screen is off or the tab is hidden, and
+    // often leave Wi-Fi meanwhile. When the page comes back, reconnect at once
+    // rather than waiting out up to 15 s of backoff.
+    if let Some(document) = web_sys::window().and_then(|w| w.document()) {
+        let ws_for_visible = ws.clone();
+        let doc_for_cb = document.clone();
+        let on_visibility = Closure::<dyn FnMut()>::new(move || {
+            if !doc_for_cb.hidden() {
+                ws_for_visible.reconnect_now();
+            }
+        });
+        let _ = document.add_event_listener_with_callback(
+            "visibilitychange",
+            on_visibility.as_ref().unchecked_ref(),
+        );
+        on_visibility.forget();
+    }
 
     let ws_for_joystick = ws.clone();
     let ws_for_drawer = ws.clone();
@@ -267,6 +303,7 @@ pub fn App() -> impl IntoView {
         <TopStrip
             ws=ws_for_estop
             conn_state=conn_state
+            motors_enabled=motors_enabled
             battery_label=battery_label
             drawer_open=drawer_open
         />

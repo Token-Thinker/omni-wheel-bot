@@ -508,3 +508,9 @@ body[data-stick="active"] .joystick-knob {
   opacity: 1;
   visibility: visible;
 }
+
+/* Same button reads ENABLE while the motors are off (after STOP or any
+   reconnect). Green so it is not mistaken for the stop action. */
+.estop-btn[data-enabled="0"] {
+  background: var(--ok, #2f9e62);
+}
