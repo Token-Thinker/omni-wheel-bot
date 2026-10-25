@@ -73,6 +73,8 @@ const ENCODER_COUNTS_PER_M: f32 =
     ENCODER_COUNTS_PER_REV / (2.0 * std::f32::consts::PI * WHEEL_RADIUS_M);
 /// Wheel actuator response (first-order lag). Higher = snappier.
 const WHEEL_RESPONSE_PER_S: f32 = 6.0;
+/// Yaw per unit of sideways stick in two-wheel mode (firmware `real.rs`).
+const TWO_WHEEL_STICK_TURN_GAIN: f32 = 0.6;
 /// Default stiction threshold baked into the v1-alpha profile.
 const DEFAULT_STICTION: f32 = 0.45;
 /// Default per-wheel slip ratios.
@@ -513,11 +515,13 @@ impl SimEngine {
         };
         let forward_norm = dir.cos() * effective_speed_norm;
         let lateral_norm = dir.sin() * effective_speed_norm;
-        // Lateral motion isn't reachable with two parallel wheels — translate
-        // it into a softened forward bias so the operator still gets feedback
-        // when nudging sideways.
-        let forward = (forward_norm + 0.15 * lateral_norm) * MAX_LINEAR_SPEED_M_S;
-        let yaw_norm = (self.inputs.yaw_rate_deg_s / MAX_YAW_RATE_DEG_S).clamp(-1.0, 1.0);
+        // Two parallel wheels cannot strafe, so the sideways part of the stick
+        // steers instead -- stick right turns right (clockwise, negative yaw).
+        // Mirrors `TWO_WHEEL_STICK_TURN_GAIN` in the firmware's `real.rs`.
+        let forward = forward_norm * MAX_LINEAR_SPEED_M_S;
+        let yaw_norm = (self.inputs.yaw_rate_deg_s / MAX_YAW_RATE_DEG_S
+            - TWO_WHEEL_STICK_TURN_GAIN * lateral_norm)
+            .clamp(-1.0, 1.0);
         let yaw_contrib = yaw_norm * (TRACK_WIDTH_M / 2.0) * MAX_YAW_RATE_DEG_S.to_radians();
 
         let left = (forward - yaw_contrib) * self.trim[0];
@@ -1102,6 +1106,41 @@ mod tests {
         assert_eq!(s.drive_mode, SimDriveMode::TwoWheelFront);
         assert_eq!(s.wheels[2], 0.0);
         assert_eq!(s.encoder_total[2], 0);
+    }
+
+    /// Two-wheel mode has no strafe, so a sideways stick must turn the robot
+    /// in place -- right turns clockwise (yaw decreases) -- instead of doing
+    /// nothing or creeping forward.
+    #[test]
+    fn two_wheel_sideways_stick_turns_in_place() {
+        for (dir, clockwise) in [(90.0, true), (270.0, false)] {
+            let mut e = SimEngine::new();
+            e.set_stiction(0.0);
+            e.set_slip(0.0, 0.0);
+            e.set_enabled(true);
+            e.set_translate(dir, 0.8);
+            for _ in 0..50 {
+                e.tick(0.02);
+            }
+            assert!(
+                if clockwise {
+                    e.yaw_rad < -0.2
+                }
+                else {
+                    e.yaw_rad > 0.2
+                },
+                "dir {dir}: expected a {} turn, yaw={}",
+                if clockwise {
+                    "clockwise"
+                }
+                else {
+                    "counter-clockwise"
+                },
+                e.yaw_rad
+            );
+            let travel = (e.x_m * e.x_m + e.y_m * e.y_m).sqrt();
+            assert!(travel < 0.05, "dir {dir}: pivot travelled {travel} m");
+        }
     }
 
     #[test]

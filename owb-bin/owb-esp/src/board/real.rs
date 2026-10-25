@@ -19,6 +19,15 @@ use crate::profile::{BoardProfile, DriveControlMode, MotorBridgeMode, MotorPins}
 #[cfg(feature = "real-executors")]
 const ALPHA_TWO_WHEEL_FULL_YAW_DEG_S: f32 = 720.0;
 
+/// Two parallel wheels cannot strafe, so in `TwoWheelFront` the sideways part
+/// of a translate command steers instead (arcade mapping): stick right turns
+/// right. This is the yaw (as a fraction of full) per unit of sideways stick.
+/// Full right at speed 1.0 asks for 0.6, which the pivot floor lifts to a
+/// clean in-place turn; a 45-degree stick arcs. Before this, the single-stick
+/// phone UI could not turn the bot at all: a 90-degree stick stopped it.
+#[cfg(feature = "real-executors")]
+const TWO_WHEEL_STICK_TURN_GAIN: f32 = 0.6;
+
 /// Replans closer together than this reuse the last PID output. Motion
 /// commands trigger a replan on top of the background tick, and an encoder
 /// delta over a few milliseconds is mostly quantisation noise.
@@ -101,6 +110,9 @@ pub struct RealBoardRuntime {
     /// Sign of the last commanded forward component. Used to re-arm the kick
     /// on a direction reversal as well as on the rising edge above deadband.
     last_speed_norm_sign: f32,
+    /// Yaw contributed by the sideways stick on the last two-wheel plan; the
+    /// straightness loop must stand down while the operator is steering.
+    last_stick_turn_norm: f32,
     heading_hold_enabled: bool,
     heading_hold_kp: f32,
     heading_hold_correction: f32,
@@ -322,6 +334,7 @@ impl RealBoardRuntime {
             stiction_kick_boost_norm: profile.stiction_kick_boost_norm,
             stiction_kick_active_until_ms: None,
             last_speed_norm_sign: 0.0,
+            last_stick_turn_norm: 0.0,
             heading_hold_enabled: false,
             heading_hold_kp: 0.0,
             heading_hold_correction: 0.0,
@@ -386,18 +399,24 @@ impl RealBoardRuntime {
     }
 
     fn two_wheel_front_targets(&mut self) -> [f32; 3] {
-        let yaw_norm = (self.last_yaw_rate_deg_s / ALPHA_TWO_WHEEL_FULL_YAW_DEG_S).clamp(-1.0, 1.0);
-        // `convert_to_body_frame` returns `(strafe, forward)`, so the forward
-        // component is `.1` -- discarding `.0` here is deliberate, not a typo.
-        // Two-wheel front drive has no strafe authority, so the lateral part of
-        // the command is simply unavailable on this chassis. If that tuple order
-        // ever changes, this becomes a silent zero-throttle bug; the kinematics
-        // test `body_frame_puts_forward_in_second_element` pins it.
-        let (_, forward_raw) = ek::convert_to_body_frame(
+        // `convert_to_body_frame` returns `(strafe, forward)`; if that tuple
+        // order ever changes this silently swaps throttle and steering, which
+        // the kinematics test `body_frame_puts_forward_in_second_element` pins.
+        // `strafe` is `-speed * sin(direction)`, and the UI's 90 degrees is
+        // stick-right, so stick-right is `-strafe`.
+        let (strafe, forward_raw) = ek::convert_to_body_frame(
             self.last_speed_norm,
             self.last_direction_deg,
             self.last_orientation_deg,
         );
+        // No strafe authority on two parallel wheels: steer with it instead.
+        // Positive yaw is counter-clockwise (left wheel slows), so stick-right
+        // subtracts.
+        let stick_right = -strafe;
+        self.last_stick_turn_norm = -TWO_WHEEL_STICK_TURN_GAIN * stick_right;
+        let yaw_norm = (self.last_yaw_rate_deg_s / ALPHA_TWO_WHEEL_FULL_YAW_DEG_S
+            + self.last_stick_turn_norm)
+            .clamp(-1.0, 1.0);
         // Stiction floor: when the operator commands any forward motion above the
         // deadband but below the static-friction threshold, snap the magnitude up
         // to `min_forward_speed_norm`. Preserves sign. Baked in per profile.
@@ -1197,7 +1216,8 @@ impl RealBoardRuntime {
     /// command still sees the cumulative delta.
     fn apply_heading_hold_correction(&mut self) {
         let forward_active = self.last_speed_norm.abs() > self.drive.motor_deadband_norm
-            && self.last_yaw_rate_deg_s.abs() < 1.0;
+            && self.last_yaw_rate_deg_s.abs() < 1.0
+            && self.last_stick_turn_norm.abs() < 0.05;
         if !self.heading_hold_enabled
             || self.drive_mode != DriveControlMode::TwoWheelFront
             || !self.enabled
