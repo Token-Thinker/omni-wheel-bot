@@ -246,7 +246,21 @@
   Estimate: 1-2h
   Outcome: the same firmware image can switch board modes without a rebuild.
 
-- [ ] P1: SoftAP TCP traffic from associated client never reaches the HTTP server.
+- [x] P1: SoftAP TCP traffic from associated client never reaches the HTTP server.
+  **Resolved 2026-10-24, phone-validated on the v1-alpha bench unit** (join,
+  DHCP, the Leptos UI, ~1,100 drive commands, and reconnect after the phone
+  dropped Wi-Fi). Three stacked causes:
+    1. CPU0 main-stack overflow. The stack is whatever DRAM1 leaves after .bss,
+       and the 100 KB `heap_allocator!` lives in .bss, so the stack was ~8-9 KB.
+       It grew down into the Wi-Fi blob's supplicant/hostapd state (`gWpaSm`,
+       `global_hapd`, ...). esp-hal 1.2's stack guard exposed it. Fixed:
+       HEAP_BYTES 100 -> 72 KB (stack ~36 KB).
+    2. Internal-heap starvation. Four PWA workers (~27 KB each) left ~1.3 KB of
+       internal heap, and the Wi-Fi driver could not let stations join. Fixed:
+       the worker futures and buffers live in PSRAM (`ui_assets.rs`).
+    3. Camera boards served the HIL page, not the UI, on :80, and that page never
+       sent the control key. Fixed: every board serves the PWA on :80.
+  The original investigation notes follow.
   Observed 2026-05-25 during the no-wifi e2e validation pass. Boot
   sequence: AP comes up cleanly (`SoftAP started at 192.168.4.1`),
   HTTP server binds (`Starting server at 192.168.4.1:80`), phone
@@ -559,7 +573,7 @@ stack = **`trouble-host` over the `esp-radio` `ble` controller**, and
   version coupling (see Dependency section). Effort: M–L.
 
 ### P1: SoftAP unicast bug (carried forward, see detailed entry above)
-- [ ] P1: SoftAP TCP/unicast frames never reach picoserve (DHCP works, HTTP
+- [x] P1 (resolved 2026-10-24; see the detailed entry): SoftAP TCP/unicast frames never reach picoserve (DHCP works, HTTP
   times out). Most-likely fix is `AccessPointConfig` completeness (channel,
   `max_connections`, beacon interval) — investigation path (a). BLE-first means
   this is no longer the only offline path, but still wanted for the browser UI.

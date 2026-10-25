@@ -13,7 +13,20 @@
 extern crate alloc;
 
 use embassy_net::Stack;
-use owb_core::net::server::{run_with_router, DEFAULT_CONTROL_PORT};
+use owb_core::net::server::{
+    run_with_router_buffers,
+    DEFAULT_CONTROL_PORT,
+    SERVER_HTTP_BUFFER_BYTES,
+    SERVER_RX_BUFFER_BYTES,
+    SERVER_TX_BUFFER_BYTES,
+};
+
+/// A zeroed byte buffer in PSRAM.
+fn psram_buffer(len: usize) -> allocator_api2::vec::Vec<u8, esp_alloc::ExternalMemory> {
+    let mut buf = allocator_api2::vec::Vec::with_capacity_in(len, esp_alloc::ExternalMemory);
+    buf.resize(len, 0);
+    buf
+}
 use picoserve::{
     io::embedded_io_async as embedded_aio,
     response::Content,
@@ -169,13 +182,37 @@ macro_rules! pwa_worker {
     ($name:ident, $id:expr) => {
         #[embassy_executor::task]
         pub async fn $name(stack: Stack<'static>) -> ! {
-            alloc::boxed::Box::pin(run_with_router(
-                $id,
-                DEFAULT_CONTROL_PORT,
-                stack,
-                None,
-                pwa_router(),
-            ))
+            // Each worker is a ~14 KB server future plus ~13 KB of TCP/HTTP
+            // buffers. In internal RAM, four of them took the heap to 836 B
+            // free (measured), and the Wi-Fi driver -- which needs internal
+            // RAM per received frame -- could no longer let a station join.
+            // So both live in PSRAM. Nothing in them is atomic (picoserve,
+            // embassy-net and embassy-time futures use none), which is the
+            // one thing S3 PSRAM cannot do reliably.
+            //
+            // Box a small async block, not the server future itself:
+            // boxing `run_with_router(..)` directly builds it on the shared
+            // CPU0 stack first and then copies it; inside the block it is
+            // built in the (PSRAM) block state on first poll.
+            allocator_api2::boxed::Box::pin_in(
+                async move {
+                    let mut rx = psram_buffer(SERVER_RX_BUFFER_BYTES);
+                    let mut tx = psram_buffer(SERVER_TX_BUFFER_BYTES);
+                    let mut http = psram_buffer(SERVER_HTTP_BUFFER_BYTES);
+                    run_with_router_buffers(
+                        $id,
+                        DEFAULT_CONTROL_PORT,
+                        stack,
+                        None,
+                        pwa_router(),
+                        &mut rx,
+                        &mut tx,
+                        &mut http,
+                    )
+                    .await
+                },
+                esp_alloc::ExternalMemory,
+            )
             .await
         }
     };

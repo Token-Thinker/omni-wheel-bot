@@ -432,7 +432,7 @@ impl CameraState {
         }
 
         let (descs, buffer) = dma_buf.split();
-        let found = find_jpeg(buffer);
+        let found = find_jpeg(&buffer);
         let frame_ptr = found.map(|(start, _end)| unsafe { buffer.as_ptr().add(start) });
         let frame_len = found.map(|(start, end)| end - start);
         let rebuilt = DmaRxStreamBuf::new(descs, buffer).ok()?;
@@ -693,11 +693,11 @@ pub async fn snap_task() -> ! {
                 });
                 let (descs, buffer) = dma_buf.split();
                 match camera_format() {
-                    CameraFormat::Jpeg => emit_snap_jpeg(buffer),
+                    CameraFormat::Jpeg => emit_snap_jpeg(&buffer),
                     CameraFormat::Yuv422 => {
                         let dims = CAMERA_DIMS.load(Ordering::Acquire);
                         let (w, h) = ((dims >> 16) as u16, (dims & 0xffff) as u16);
-                        emit_snap_raw(buffer, w, h);
+                        emit_snap_raw(&buffer, w, h);
                     }
                 }
                 if let Ok(rebuilt) = DmaRxStreamBuf::new(descs, buffer) {

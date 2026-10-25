@@ -118,7 +118,8 @@ const CPR=600,TAU=6.283185307179586,RUN_MS=1400;
 let ws,lastEncAt=0,seqBusy=false;
 const st=document.getElementById('st'),out=document.getElementById('log');
 function log(s){out.textContent=(s+'\n'+out.textContent).slice(0,3200)}
-function url(){return (location.protocol==='https:'?'wss:':'ws:')+'//'+location.host+'/ws?session=hil-'+Math.random().toString(16).slice(2)}
+function key(){const p=new URLSearchParams(location.hash.slice(1)),q=new URLSearchParams(location.search);const k=p.get('key')||q.get('key');if(k){try{localStorage.setItem('owb_ui_control_key',k)}catch(_){}return k}try{return localStorage.getItem('owb_ui_control_key')||''}catch(_){return ''}}
+function url(){const k=key();return (location.protocol==='https:'?'wss:':'ws:')+'//'+location.host+'/ws?session=hil-'+Math.random().toString(16).slice(2)+(k?'&key='+encodeURIComponent(k):'')}
 function send(o){if(!ws||ws.readyState!==1){log('socket not ready');return}let s=JSON.stringify(o);ws.send(s);log('> '+s)}
 function dis(){send({ct:'i',ic:'disable'})}
 function enc(){send({ct:'i',ic:'read_encoders'})}
@@ -385,10 +386,10 @@ pub async fn run_minimal(
 
 /// Build the static asset router used for the main embedded frontend.
 ///
-/// Returns the minimal HIL control page.  The full Leptos/WASM PWA is served
-/// by `owb-esp` directly via its own picoserve routes (see
-/// `owb-bin/owb-esp/src/ui_assets.rs`), which override this route at a higher
-/// priority when `dist/` assets are embedded at compile time.
+/// Returns the minimal HIL control page. Boards that embed the Leptos/WASM
+/// PWA (`owb-esp`, see `owb-bin/owb-esp/src/ui_assets.rs`) do not use this
+/// router for their UI at all: they run their own PWA workers on the control
+/// port, and this page is only what HIL-low-mode builds serve.
 pub(crate) fn frontend_index_response() -> ([(&'static str, &'static str); 1], StaticAsset) {
     (
         [("Cache-Control", "no-store, no-cache, max-age=0")],
@@ -427,6 +428,48 @@ pub async fn run_with_router<P>(
 where
     P: PathRouter,
 {
+    let mut rx_buffer = vec![0u8; SERVER_RX_BUFFER_BYTES];
+    let mut tx_buffer = vec![0u8; SERVER_TX_BUFFER_BYTES];
+    let mut http_buffer = vec![0u8; SERVER_HTTP_BUFFER_BYTES];
+    run_with_router_buffers(
+        id,
+        port,
+        stack,
+        config,
+        router,
+        &mut rx_buffer,
+        &mut tx_buffer,
+        &mut http_buffer,
+    )
+    .await
+}
+
+/// TCP receive buffer per server worker.
+pub const SERVER_RX_BUFFER_BYTES: usize = 1024;
+/// TCP transmit buffer per worker. With 1 KB, concurrent workers stall
+/// mid-transfer under embassy-net polling pressure and picoserve RSTs the
+/// connection.
+pub const SERVER_TX_BUFFER_BYTES: usize = 4096;
+/// HTTP request/response buffer per worker; headroom for large header sets.
+pub const SERVER_HTTP_BUFFER_BYTES: usize = 8192;
+
+/// [`run_with_router`] with caller-owned buffers, so a board can place them in
+/// a specific memory region (e.g. PSRAM, keeping internal RAM for the Wi-Fi
+/// driver). Size them with the `SERVER_*_BUFFER_BYTES` constants.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_with_router_buffers<P>(
+    id: usize,
+    port: u16,
+    stack: Stack<'static>,
+    config: Option<&picoserve::Config>,
+    router: Router<P>,
+    rx_buffer: &mut [u8],
+    tx_buffer: &mut [u8],
+    http_buffer: &mut [u8],
+) -> !
+where
+    P: PathRouter,
+{
     let announce = matches!(id, 0 | 3);
     wait_for_network(&stack, announce).await;
 
@@ -451,21 +494,8 @@ where
         }
     }
 
-    // 4 KB tx_buffer: with 1 KB each, concurrent workers stall mid-transfer
-    // under embassy-net polling pressure and picoserve RSTs the connection.
-    // 8 KB http_buffer: headroom for large response header sets.
-    let mut rx_buffer = vec![0u8; 1024];
-    let mut tx_buffer = vec![0u8; 4096];
-    let mut http_buffer = vec![0u8; 8192];
-
-    picoserve::Server::new(&router, config, http_buffer.as_mut_slice())
-        .listen_and_serve(
-            id,
-            stack,
-            port,
-            rx_buffer.as_mut_slice(),
-            tx_buffer.as_mut_slice(),
-        )
+    picoserve::Server::new(&router, config, http_buffer)
+        .listen_and_serve(id, stack, port, rx_buffer, tx_buffer)
         .await
         .into_never()
 }

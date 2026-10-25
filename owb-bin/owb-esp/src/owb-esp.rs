@@ -13,25 +13,27 @@ mod ui_assets;
 
 use esp_alloc as _;
 use esp_backtrace as _;
+#[cfg(target_arch = "xtensa")]
+use esp_hal::system::Stack as CpuStack;
 use esp_hal::{
     clock::CpuClock,
     gpio::AnyPin,
     i2c::master::{Config as I2cConfig, I2c},
     rtc_cntl::{Rtc, Rwdt, RwdtStage},
-    usb_serial_jtag::UsbSerialJtag,
+    usb::usb_serial_jtag::UsbSerialJtag,
     Blocking,
 };
-#[cfg(target_arch = "xtensa")]
-use esp_hal::{interrupt::software::SoftwareInterrupt, system::Stack as CpuStack};
 use esp_radio::{
     self,
     wifi::{
         ap::AccessPointConfig,
         sta::StationConfig,
-        AuthenticationMethod,
+        AuthenticationMethodConfig,
         Config as WifiModeConfig,
         ControllerConfig,
         Interface,
+        Password,
+        Ssid,
         WifiController,
     },
 };
@@ -53,19 +55,28 @@ const S3_NET_SOCKETS: usize = 12;
 // The ESP32-S3 has two accessible SRAM banks for heap:
 //
 //  • DRAM1 (dram_seg)  0x3FC88000 – 0x3FCDB700  334 KB
-//    Static sections (non-heap) occupy ~178 KB (WiFi, embassy, StackResources,
-//    etc.).  The CPU0 main-task stack lives in whatever DRAM1 is left after
-//    statics: stack = 334 KB - 178 KB - HEAP_BYTES.
-//    With HEAP_BYTES = 100 KB:  stack = 334 – 178 – 100 = 56 KB  ← enough for
-//    the 14 KB Box::pin(run_with_router(…)) temporary on first task poll.
+//    The CPU0 main-task stack is whatever DRAM1 is left after statics, and
+//    `heap_allocator!` puts the DRAM1 heap in .bss, so HEAP_BYTES comes straight
+//    out of the stack. Read the real figure from the ELF, not from arithmetic:
+//    stack = `_stack_start_cpu0` - `_stack_end_cpu0`.
+//
+//    Measured 2026-10-24: with HEAP_BYTES = 100 KB the stack was only ~8-9 KB
+//    (the old "56 KB" estimate predates the 40 KB camera DMA buffer, the
+//    camera task pools and the core-1 stack). That was a latent overflow:
+//    the stack grows down into the top of .bss, which holds the Wi-Fi blob's
+//    supplicant/hostapd state (`gWpaSm`, `global_hapd`, `eloop`, ...). esp-hal
+//    1.2's stack guard turned it into a boot panic while formatting a float.
+//    72 KB gives the stack ~36 KB -- room for the 14 KB
+//    Box::pin(run_with_router) temporary on first poll plus deep `fmt` calls.
 //
 //  • DRAM2 (dram2_seg) 0x3FCDB700 – 0x3FCED710  72 KB
 //    Reserved by memory.x for application heap use.  We add 70 KB here,
 //    leaving ~2 KB as a safety margin below the 72 KB segment limit.
 //
-//  Total heap = 100 KB + 70 KB = 170 KB.
-//  Runtime peak (measured): ~47 KB pre-existing + 4 × ~27 KB workers ≈ 157 KB.
-//  Margin ≈ 13 KB (covers linked_list_allocator fragmentation overhead).
+//  Internal heap = 72 KB + 70 KB = 142 KB, registered before PSRAM, so the
+//  allocator fills internal RAM first and only spills general allocations
+//  into the 16 MB PSRAM region once it is full. Wi-Fi DMA buffers request
+//  internal memory explicitly and never spill.
 
 const DRAM2_HEAP_BYTES: usize = 70 * 1024;
 
@@ -77,7 +88,7 @@ static mut DRAM2_HEAP_MEM: core::mem::MaybeUninit<[u8; DRAM2_HEAP_BYTES]> =
 /// separately under opposing `#[cfg]`s with the identical value, which read as
 /// if the two builds were deliberately tuned apart. They are not -- the DRAM1
 /// budget above is a property of the linker layout, not of the executor choice.
-const HEAP_BYTES: usize = 100 * 1024;
+const HEAP_BYTES: usize = 72 * 1024;
 const HIL_LOW_MODE_BUILD: bool = option_env!("OWB_HIL_LOW_MODE").is_some();
 const OWB_LOG_LEVEL: &str = match option_env!("OWB_LOG_LEVEL") {
     Some(level) => level,
@@ -131,24 +142,25 @@ fn spawn_runtime(
         return;
     }
 
-    // Gate the camera branch at compile time so ws_task_0/ws_task_1 from
-    // owb-core runtime are eliminated by --gc-sections in no-camera builds.
-    // Without this gate the linker keeps those TaskPool statics in DRAM even
-    // when has_camera is always false, exhausting the DRAM budget.
+    // Every board serves the Leptos operator UI on port 80. Camera boards used
+    // to get owb-core's camera app shell there instead, whose `/` is the
+    // compact HIL test page -- so the phone UI was never served on v1-alpha,
+    // and that page also never sent the control key (every WebSocket was
+    // rejected once CONTROL_KEY was set). The MJPEG stream keeps its own
+    // port (81).
+    ui_assets::spawn_pwa_runtime(spawner, stack, ap_ip);
+
+    // `#[cfg]`, not `cfg!()`, so no-camera builds drop the stream task's pool.
     #[cfg(not(feature = "no-camera"))]
     if has_camera {
-        owb_core::runtime::spawn_camera_web_app(spawner, stack, ap_ip);
         camera_stream_task(stack)
             .map(|t| spawner.spawn(t))
             .unwrap_or_else(|_| esp_println::println!("[ERR] camera_stream_task spawn failed"));
-        camera_snap_task()
-            .map(|t| spawner.spawn(t))
-            .unwrap_or_else(|_| esp_println::println!("[ERR] camera_snap_task spawn failed"));
-        return;
+        // camera_snap_task is already running: it is spawned at camera init so
+        // `snap` works without Wi-Fi.
     }
-
-    // Normal / no-camera path: one PWA HTTP/WS worker.
-    ui_assets::spawn_pwa_runtime(spawner, stack, ap_ip);
+    #[cfg(feature = "no-camera")]
+    let _ = has_camera;
 }
 
 fn attach_board_runtime(
@@ -214,7 +226,10 @@ fn maybe_start_dual_core_board_runtime(
 
     esp_rtos::start_second_core(
         cpu_ctrl,
-        unsafe { SoftwareInterrupt::<1>::steal() },
+        // esp-rtos 0.4 takes the FROM_CPU_INTR1 peripheral directly. `main`
+        // has already moved `peripherals`, so steal the singleton; nothing
+        // else uses this software interrupt.
+        unsafe { esp_hal::peripherals::FROM_CPU_INTR1::steal() },
         control_stack,
         move || {
             let executor = CONTROL_CORE_EXECUTOR
@@ -319,13 +334,9 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
     // exists; one block gated on both arches states the actual requirement.
     #[cfg(any(target_arch = "xtensa", target_arch = "riscv32"))]
     {
-        use esp_hal::{
-            interrupt::software::SoftwareInterruptControl,
-            timer::systimer::SystemTimer,
-        };
+        use esp_hal::timer::systimer::SystemTimer;
         let systimer = SystemTimer::new(peripherals.SYSTIMER);
-        let software = SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
-        esp_rtos::start(systimer.alarm0, software.software_interrupt0);
+        esp_rtos::start(systimer.alarm0, peripherals.FROM_CPU_INTR0);
     }
 
     // ── Hardware watchdog (RWDT) ────────────────────────────────────────────
@@ -337,7 +348,7 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
     // esp-hal 1.1 does not expose a runtime brownout API for ESP32-S3.
     {
         static RWDT_CELL: StaticCell<Rwdt> = StaticCell::new();
-        let mut rtc = Rtc::new(peripherals.LPWR);
+        let mut rtc = Rtc::new(peripherals.RTC_TIMER);
         rtc.rwdt.set_timeout(
             RwdtStage::Stage0,
             esp_hal::time::Duration::from_millis(5_000),
@@ -371,9 +382,8 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
                 Ok(()) => {
                     app_has_camera = true;
                     esp_println::println!("[CAM] init ok");
-                    // Spawn snap task here so it runs regardless of WiFi availability.
-                    // In spawn_runtime it is also spawned (WiFi path) — the second
-                    // spawn attempt is silently dropped because the TaskPool is full.
+                    // Spawn the snap task here so it runs regardless of Wi-Fi
+                    // availability; this is its only spawn site.
                     #[cfg(not(feature = "no-camera"))]
                     camera_snap_task()
                         .map(|t| spawner.spawn(t))
@@ -472,16 +482,33 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
 
     let mut started_ws = false;
     if !SSID.is_empty() {
-        let sta_cfg = StationConfig::default()
-            .with_ssid(SSID)
-            .with_password(PASSWORD.into());
+        // esp-radio 1.0.0-beta.1 rejects an oversized SSID or password instead
+        // of truncating it. Log and fall through to the SoftAP rather than
+        // panicking at boot: a robot that reboot-loops is worse than one that
+        // comes up on its own AP.
+        let sta_cfg = match (Ssid::try_from(SSID), Password::try_from(PASSWORD)) {
+            (Ok(ssid), Ok(password)) => Some(
+                StationConfig::default()
+                    .with_ssid(ssid)
+                    .with_authentication(AuthenticationMethodConfig::Wpa2Personal(password)),
+            ),
+            _ => {
+                esp_println::println!(
+                    "[WIFI] SSID/PASSWORD rejected (SSID <= 32 bytes, password 8-63 chars)"
+                );
+                None
+            }
+        };
         // `set_config` applies the config and starts the interface (esp_wifi_start
         // runs inside it), so there is no separate start step.
-        if wifi_ctrl
-            .set_config(&WifiModeConfig::Station(sta_cfg))
-            .is_ok()
-            && wifi_ctrl.connect_async().await.is_ok()
-        {
+        let sta_up = match sta_cfg {
+            Some(cfg) => {
+                wifi_ctrl.set_config(&WifiModeConfig::Station(cfg)).is_ok()
+                    && wifi_ctrl.connect_async().await.is_ok()
+            }
+            None => false,
+        };
+        if sta_up {
             let sta = Interface::station();
             let net_cfg = NetConfig::dhcpv4(Default::default());
             let (stack, runner) =
@@ -506,26 +533,35 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
         // actuated robot, an open AP + the (optional) control auth means anyone
         // in radio range could drive it, so WPA2 is the default and the open
         // path is a logged, opt-in bench mode.
-        let ap_cfg = if !AP_PASSWORD.is_empty() {
-            Some(
-                AccessPointConfig::default()
-                    .with_ssid(AP_SSID)
-                    .with_auth_method(AuthenticationMethod::Wpa2Personal)
-                    .with_password(AP_PASSWORD.into()),
-            )
+        let auth = if !AP_PASSWORD.is_empty() {
+            match Password::try_from(AP_PASSWORD) {
+                Ok(password) => Some(AuthenticationMethodConfig::Wpa2Personal(password)),
+                Err(_) => {
+                    esp_println::println!("[SEC] AP_PASSWORD rejected: WPA2 needs 8-63 chars");
+                    None
+                }
+            }
         }
         else if ALLOW_OPEN_AP {
             esp_println::println!(
                 "[SEC] WARNING: starting OPEN SoftAP (OWB_ALLOW_OPEN_AP set; bench use only)"
             );
-            Some(
-                AccessPointConfig::default()
-                    .with_ssid(AP_SSID)
-                    .with_auth_method(AuthenticationMethod::None),
-            )
+            Some(AuthenticationMethodConfig::Open)
         }
         else {
             None
+        };
+        let ap_cfg = match (auth, Ssid::try_from(AP_SSID)) {
+            (Some(auth), Ok(ssid)) => Some(
+                AccessPointConfig::default()
+                    .with_ssid(ssid)
+                    .with_authentication(auth),
+            ),
+            (Some(_), Err(_)) => {
+                esp_println::println!("[WIFI] AP_SSID rejected: longer than 32 bytes");
+                None
+            }
+            (None, _) => None,
         };
 
         match ap_cfg {
@@ -550,6 +586,21 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
                     esp_println::println!("SoftAP start failed");
                 }
                 spawn_runtime(spawner, *stack, Some(ap_ip), app_has_camera);
+                esp_println::println!(
+                    "[HEAP] after AP spawn_runtime:\n{}",
+                    esp_alloc::HEAP.stats()
+                );
+                heap_report_task()
+                    .map(|t| spawner.spawn(t))
+                    .unwrap_or_else(|_| {
+                        esp_println::println!("[ERR] heap_report_task spawn failed")
+                    });
+                // Log every station join/leave. When a phone "can't load the
+                // page", this separates "never associated" from "associated
+                // but no TCP" without a sniffer.
+                ap_events_task(wifi_ctrl)
+                    .map(|t| spawner.spawn(t))
+                    .unwrap_or_else(|_| esp_println::println!("[ERR] ap_events_task spawn failed"));
             }
             None => {
                 esp_println::println!(
@@ -610,6 +661,35 @@ async fn real_runtime_task(
 ) -> ! {
     let mut executor = board::RealBoardRuntime::from_profile(profile, capabilities);
     owb_core::node::command_bus::run_command_bus(&mut executor).await
+}
+
+/// One heap snapshot once the web workers have allocated their futures.
+#[embassy_executor::task]
+async fn heap_report_task() {
+    Timer::after(Duration::from_secs(8)).await;
+    esp_println::println!("[HEAP] 8 s after AP start:\n{}", esp_alloc::HEAP.stats());
+}
+
+#[embassy_executor::task]
+async fn ap_events_task(controller: WifiController<'static>) {
+    use esp_radio::wifi::ap::EventInfo;
+    loop {
+        match controller
+            .wait_for_access_point_connected_event_async()
+            .await
+        {
+            Ok(EventInfo::Connected(info)) => {
+                esp_println::println!("[AP] station joined mac={:02x?} aid={}", info.mac, info.aid)
+            }
+            Ok(EventInfo::Disconnected(info)) => {
+                esp_println::println!("[AP] station left: {:?}", info)
+            }
+            Err(e) => {
+                esp_println::println!("[AP] event wait failed: {:?}", e);
+                Timer::after(Duration::from_secs(1)).await;
+            }
+        }
+    }
 }
 
 #[embassy_executor::task]

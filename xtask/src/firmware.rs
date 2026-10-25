@@ -77,9 +77,7 @@ pub fn supports_real_executors(profile: &str) -> bool {
 
 /// `profile_has_camera` (lib.sh): only the explicitly camera-less boards
 /// return false; anything else, including an unknown name, has a camera.
-pub fn has_camera(profile: &str) -> bool {
-    !matches!(profile, "esp32-s3-devkitc-1-n32r16")
-}
+pub fn has_camera(profile: &str) -> bool { !matches!(profile, "esp32-s3-devkitc-1-n32r16") }
 
 /// `rust-version = "x.y.z"` from a Cargo.toml (owb-core's is the source of
 /// truth for the image tag).
