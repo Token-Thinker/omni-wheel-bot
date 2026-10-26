@@ -1,15 +1,49 @@
-//! Top ambient strip: connection indicator + battery readout (left), gear button (right).
+//! Top ambient strip: connection indicator + battery readout (left), E-stop and
+//! gear button (right).
+
+use std::rc::Rc;
 
 use leptos::prelude::*;
 
-use crate::transport::ConnState;
+use crate::transport::{ConnState, I2CCommand, PowerCmd, WsClient};
 
 #[component]
 pub fn TopStrip(
+    ws: Rc<WsClient>,
     conn_state: RwSignal<ConnState>,
+    motors_enabled: RwSignal<bool>,
     battery_label: RwSignal<String>,
     drawer_open: RwSignal<bool>,
 ) -> impl IntoView {
+    // E-stop latches motors off in firmware (`executor.rs` PowerCommand::Estop
+    // clears `enabled` and zeroes motion), verified on hardware: a normal
+    // translate command after an E-stop produces zero encoder movement until an
+    // explicit re-enable. Deliberately always clickable — an operator must be
+    // able to hit it even when the connection indicator looks unhealthy.
+    //
+    // The same button re-enables: it reads ENABLE whenever the motors are off
+    // (after an E-stop, or after any reconnect, since the firmware disables
+    // them when a session ends). Re-enabling is always an explicit tap.
+    let on_estop = {
+        let ws = ws.clone();
+        move |_| {
+            if motors_enabled.get_untracked() {
+                ws.send(&PowerCmd::estop());
+                motors_enabled.set(false);
+            }
+            else if ws.send(&I2CCommand::enable()) {
+                motors_enabled.set(true);
+            }
+        }
+    };
+    let estop_label = move || {
+        if motors_enabled.get() {
+            "STOP"
+        }
+        else {
+            "ENABLE"
+        }
+    };
     let conn_state_str = move || conn_state.get().as_str();
     let conn_label = move || {
         if conn_state.get() == ConnState::AuthError {
@@ -41,6 +75,17 @@ pub fn TopStrip(
                 </span>
             </div>
             <div class="strip-cluster strip-right">
+                <button
+                    id="estop-btn"
+                    class="estop-btn"
+                    type="button"
+                    aria-label=move || if motors_enabled.get() { "emergency stop" } else { "enable motors" }
+                    title="STOP cuts the motors; ENABLE turns them back on"
+                    data-enabled=move || if motors_enabled.get() { "1" } else { "0" }
+                    on:click=on_estop
+                >
+                    {estop_label}
+                </button>
                 <button
                     id="settings-toggle"
                     class="icon-btn"

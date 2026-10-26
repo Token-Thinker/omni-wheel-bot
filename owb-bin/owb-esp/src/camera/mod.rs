@@ -81,6 +81,43 @@ static CAMERA_DIMS: AtomicU32 = AtomicU32::new((160 << 16) | 120);
 const MJPEG_CONTENT_TYPE: &str = "multipart/x-mixed-replace; boundary=frame";
 const MJPEG_PREAMBLE: &[u8] = b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ";
 
+/// Sensor output format. These are mutually exclusive on the OV2640 and each
+/// one only works with a matching consumer, so they must be chosen together:
+/// `Yuv422` pairs with `emit_snap_raw`, `Jpeg` pairs with `find_jpeg`/`/stream`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum CameraFormat {
+    /// `IMAGE_MODE = 0x00`. Uncompressed YUYV, `width * height * 2` bytes.
+    /// Renders via `snap` only — MJPEG needs JPEG framing, so `/stream` is
+    /// unavailable in this mode.
+    Yuv422,
+    /// `IMAGE_MODE_JPEG_EN` via `OV2640_SETTINGS_JPEG3`. Compressed, ~17x
+    /// smaller (a 160x120 frame measured 2,225 bytes vs 38,400 for YUV422), so
+    /// far higher resolutions fit the 40 KB DMA buffer. Required for `/stream`.
+    Jpeg,
+}
+
+/// Build-time sensor format selector: `OWB_CAMERA_FORMAT=jpeg|yuv422`.
+///
+/// Defaults to `yuv422` because the v1 bench board has a **short between camera
+/// D0 (GPIO11) and D3 (GPIO10)** — adjacent pins, likely a solder bridge. The
+/// two lines were measured bit-identical across 76,800 captured bytes. In JPEG
+/// mode that corrupts `SOI 0xFFD8` into `0xFFD0` (bit3 differs from bit0), so no
+/// frame is ever locatable; in YUV422 it only perturbs pixel values, so images
+/// remain viewable. Set `jpeg` on a board with correctly routed data lines.
+const OWB_CAMERA_FORMAT: &str = match option_env!("OWB_CAMERA_FORMAT") {
+    Some(v) => v,
+    None => "yuv422",
+};
+
+pub fn camera_format() -> CameraFormat {
+    if OWB_CAMERA_FORMAT.eq_ignore_ascii_case("jpeg") {
+        CameraFormat::Jpeg
+    }
+    else {
+        CameraFormat::Yuv422
+    }
+}
+
 pub async fn init(
     sccb: &mut I2c<'_, Blocking>,
     lcd_cam: LCD_CAM<'static>,
@@ -186,12 +223,24 @@ async fn ov2640_init(
     Timer::after(Duration::from_millis(10)).await;
 
     set_window(sccb, width, height).await?;
-    // OV2640_SETTINGS_TO_CIF (inside set_window) leaves RESET = RESET_DVP without
-    // clearing it; JPEG3 init used to clear it via its trailing (RESET, 0x00).
-    // In YUV mode we skip JPEG3, so clear the DVP reset manually here.
-    write_reg_in_bank(sccb, ov2640::BANK_DSP, ov2640::RESET, 0x00)?;
+    match camera_format() {
+        CameraFormat::Jpeg => {
+            // JPEG3 sets IMAGE_MODE_JPEG_EN and ends with its own trailing
+            // (RESET, 0x00), which also clears the RESET_DVP that
+            // OV2640_SETTINGS_TO_CIF (inside set_window) leaves asserted — so
+            // this path needs no manual DVP reset clear.
+            write_regs(sccb, ov2640::OV2640_SETTINGS_JPEG3)?;
+            esp_println::println!("[CAM] format: JPEG (IMAGE_MODE_JPEG_EN)");
+        }
+        CameraFormat::Yuv422 => {
+            // OV2640_SETTINGS_CIF already left IMAGE_MODE = 0x00 (YUV422 YUYV).
+            // Skipping JPEG3 means nothing clears the RESET_DVP that
+            // OV2640_SETTINGS_TO_CIF asserted, so clear it manually here.
+            write_reg_in_bank(sccb, ov2640::BANK_DSP, ov2640::RESET, 0x00)?;
+            esp_println::println!("[CAM] format: YUV422 YUYV (/stream unavailable)");
+        }
+    }
     Timer::after(Duration::from_millis(10)).await;
-    // IMAGE_MODE = 0x00 (set by OV2640_SETTINGS_CIF) → YUV422 YUYV output.
 
     Ok(())
 }
@@ -383,7 +432,7 @@ impl CameraState {
         }
 
         let (descs, buffer) = dma_buf.split();
-        let found = find_jpeg(buffer);
+        let found = find_jpeg(&buffer);
         let frame_ptr = found.map(|(start, _end)| unsafe { buffer.as_ptr().add(start) });
         let frame_len = found.map(|(start, end)| end - start);
         let rebuilt = DmaRxStreamBuf::new(descs, buffer).ok()?;
@@ -436,6 +485,21 @@ impl Chunks for MjpegStream {
                 CAMERA_STATE.with_mut(|state| state.as_mut().and_then(CameraState::next_frame_ptr));
 
             if let Some((ptr, len)) = frame {
+                // SAFETY: `ptr`/`len` point into the DMA receive buffer owned by
+                // `CAMERA_STATE`, which is a `'static` allocation, so the address
+                // stays valid. What is *not* guaranteed by the type system is
+                // exclusivity: the `with_mut` lock was released above, so this
+                // slice aliases memory that a fresh DMA capture could write.
+                //
+                // Two writers are possible and both are held off deliberately:
+                //   * another `/stream` -- excluded by `StreamGuard`;
+                //   * `snap_task` -- excluded by its `CAMERA_STREAM_ACTIVE` check.
+                //
+                // The next capture on *this* task cannot race either, since it
+                // only happens on the following loop iteration, after the awaits
+                // below have completed. Adding a third consumer of the DMA buffer
+                // means either extending that gating or copying the frame out
+                // under the lock before sending it.
                 let jpeg = unsafe { core::slice::from_raw_parts(ptr, len) };
                 let mut header = [0u8; 96];
                 let mut idx = 0;
@@ -507,6 +571,28 @@ fn base64_emit(data: &[u8]) {
     }
 }
 
+// Emits one JPEG frame as base64, located by its SOI/EOI markers.
+// Format: [SNAP_JPEG] begin <bytes>\n<base64 lines>\n[SNAP_JPEG] end
+fn emit_snap_jpeg(buf: &[u8]) {
+    match find_jpeg(buf) {
+        Some((start, end)) => {
+            let data = &buf[start..end];
+            esp_println::println!("[SNAP_JPEG] begin {}", data.len());
+            base64_emit(data);
+            esp_println::println!("[SNAP_JPEG] end");
+        }
+        None => {
+            // On the v1 bench board this is expected: camera D0/D3 are shorted,
+            // which rewrites SOI 0xFFD8 to 0xFFD0 so no frame is locatable.
+            esp_println::println!(
+                "[SNAP] error: no JPEG frame found in {} bytes (check camera data-line wiring; \
+                 D0/D3 shorted corrupts SOI)",
+                buf.len()
+            );
+        }
+    }
+}
+
 // Emits a YUV422 (YUYV) frame as base64.  Width/height let the host decode it.
 // Format: [SNAP_RAW] begin <w> <h> <bytes>\n<base64 lines>\n[SNAP_RAW] end
 fn emit_snap_raw(
@@ -553,8 +639,9 @@ fn run_capture_blocking(
     }
 }
 
-/// Embassy task that runs on core 0.  Captures one YUV422 frame on each snap
-/// request and emits it base64-encoded over USB serial as [SNAP_RAW].
+/// Embassy task that runs on core 0.  Captures one frame on each snap request
+/// and emits it base64-encoded over USB serial — `[SNAP_RAW]` in YUV422 mode,
+/// `[SNAP_JPEG]` in JPEG mode (see [`camera_format`]).
 pub async fn snap_task() -> ! {
     loop {
         if !SNAP_REQUESTED.load(core::sync::atomic::Ordering::Acquire) {
@@ -562,6 +649,20 @@ pub async fn snap_task() -> ! {
             continue;
         }
         SNAP_REQUESTED.store(false, core::sync::atomic::Ordering::Release);
+
+        // Refuse while /stream is live. A snap `take()`s the DMA buffer and
+        // captures straight into it, but `MjpegStream` hands out a raw pointer
+        // into that same buffer and then releases the `CAMERA_STATE` lock before
+        // awaiting three `write_chunk`s. Taking the buffer during that window
+        // does not conflict on the lock -- it conflicts on the *memory*, so a
+        // snap would overwrite the frame bytes mid-send and tear the stream's
+        // JPEG. Dropping the request is better than corrupting the stream; the
+        // operator can re-issue it once the stream closes.
+        if CAMERA_STREAM_ACTIVE.load(core::sync::atomic::Ordering::Acquire) {
+            esp_println::println!("[SNAP] error: busy streaming; stop /stream and retry");
+            Timer::after(Duration::from_millis(50)).await;
+            continue;
+        }
 
         let taken = CAMERA_STATE.with_mut(|s| {
             s.as_mut().and_then(|state| {
@@ -578,8 +679,8 @@ pub async fn snap_task() -> ! {
             continue;
         };
 
-        // Single-pass YUV422 capture.  OV2640 in YUV mode uses VSYNC for full
-        // frame boundaries, so one DMA transfer = one complete frame.
+        // Single-pass capture.  The OV2640 uses VSYNC for full frame
+        // boundaries, so one DMA transfer yields one complete frame.
         match run_capture_blocking(camera, dma_buf) {
             Err(msg) => {
                 esp_println::println!("[SNAP] capture error: {}", msg);
@@ -591,9 +692,14 @@ pub async fn snap_task() -> ! {
                     }
                 });
                 let (descs, buffer) = dma_buf.split();
-                let dims = CAMERA_DIMS.load(Ordering::Acquire);
-                let (w, h) = ((dims >> 16) as u16, (dims & 0xffff) as u16);
-                emit_snap_raw(buffer, w, h);
+                match camera_format() {
+                    CameraFormat::Jpeg => emit_snap_jpeg(&buffer),
+                    CameraFormat::Yuv422 => {
+                        let dims = CAMERA_DIMS.load(Ordering::Acquire);
+                        let (w, h) = ((dims >> 16) as u16, (dims & 0xffff) as u16);
+                        emit_snap_raw(&buffer, w, h);
+                    }
+                }
                 if let Ok(rebuilt) = DmaRxStreamBuf::new(descs, buffer) {
                     CAMERA_STATE.with_mut(|s| {
                         if let Some(st) = s.as_mut() {
@@ -614,6 +720,16 @@ pub async fn stream() -> Result<ChunkedResponse<MjpegStream>, (StatusCode, &'sta
     }
     if !CAMERA_DEVICE_ENABLED.load(core::sync::atomic::Ordering::Acquire) {
         return Err((StatusCode::SERVICE_UNAVAILABLE, "camera disabled"));
+    }
+    // MJPEG requires JPEG framing. In YUV422 the frame contains no SOI/EOI, so
+    // `find_jpeg` returns None on every capture and `write_chunks` would sit on
+    // its 10 ms retry branch forever, holding the stream guard and never
+    // sending a byte. Refuse up front instead of hanging the client.
+    if camera_format() != CameraFormat::Jpeg {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "sensor is in YUV422 mode; MJPEG needs OWB_CAMERA_FORMAT=jpeg (use /snap instead)",
+        ));
     }
 
     let _guard = StreamGuard::acquire().ok_or((StatusCode::TOO_MANY_REQUESTS, "camera busy"))?;

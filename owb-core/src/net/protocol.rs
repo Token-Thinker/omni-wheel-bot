@@ -12,7 +12,7 @@ pub const API_SCHEMA_JSON: &str = r#"{
   "version": 1,
   "transport": {
     "http": {
-        "static": ["/", "/setup", "/style.css", "/script.js"],
+        "static": ["/", "/setup", "/app.js", "/app.wasm", "/style.css", "/manifest.json"],
       "health": "/healthz",
       "schema": "/api/schema",
       "camera_page_alias": "/camera",

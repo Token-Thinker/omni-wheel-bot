@@ -26,17 +26,20 @@ ble = []
 owb-core = { path = "../../owb-core", features = ["net", "serde"], version = "0.2.0" }
 
 # Board-specific and embedded dependencies
-embassy-executor = { version = "0.10.0" }
-embassy-net = { version = "0.9", features = ["dhcpv4"] }
-embassy-time = { version = "0.5" }
+embassy-executor = { workspace = true }
+embassy-net = { workspace = true, features = ["dhcpv4"] }
+embassy-time = { workspace = true }
 
-esp-alloc = { version = "0.10.0" }
-esp-backtrace = { version = "0.19.0", features = ["println", "panic-handler"] }
-esp-bootloader-esp-idf = { version = "0.5" }
-esp-hal = { version = "1.1", features = ["unstable"] }
-esp-rtos = { version = "0.3.0", features = ["embassy", "esp-radio"] }
-esp-println = { version = "0.17.0", features = ["log-04"] }
-esp-radio = { version = "1.0.0-beta.0", features = ["wifi"] }
+esp-alloc = { version = "0.11.0" }
+esp-backtrace = { version = "0.20.0", features = ["println", "panic-handler"] }
+esp-bootloader-esp-idf = { version = "0.6" }
+esp-hal = { version = "1.2", features = ["unstable"] }
+esp-rtos = { version = "0.4.0", features = ["embassy", "esp-radio"] }
+esp-println = { version = "0.18.0", features = ["log-04"] }
+esp-radio = { version = "1.0.0-beta.1", features = ["wifi"] }
 
+# Allocator-aware Box/Vec so the web workers can live in PSRAM via
+# `esp_alloc::ExternalMemory` (same major version esp-alloc implements).
+allocator-api2 = { version = "0.3", default-features = false, features = ["alloc"] }
 log = { version = "0.4" }
-picoserve = { version = "0.18.0", features = ["embassy"] }
+picoserve = { workspace = true, features = ["embassy"] }

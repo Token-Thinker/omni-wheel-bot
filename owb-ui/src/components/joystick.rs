@@ -96,6 +96,13 @@ pub fn JoystickArea(
     let last_sent_speed: Rc<RefCell<Option<f64>>> = Rc::new(RefCell::new(None));
     let trailing_timer: Rc<RefCell<Option<gloo_timers::callback::Timeout>>> =
         Rc::new(RefCell::new(None));
+    // Tracks whether a trailing flush is already scheduled.
+    //
+    // Kept separate from `trailing_timer` deliberately: the flush callback has
+    // to mark itself finished, and clearing `trailing_timer` from inside the
+    // callback would drop the `Timeout` — and with it the `Closure` currently
+    // executing. A plain flag is safe to flip from within the callback.
+    let trailing_pending = Rc::new(std::cell::Cell::new(false));
 
     // Helper: emit a drive command
     let ws_send = {
@@ -124,6 +131,7 @@ pub fn JoystickArea(
         let last_sent_dir = last_sent_dir.clone();
         let last_sent_speed = last_sent_speed.clone();
         let trailing_timer = trailing_timer.clone();
+        let trailing_pending = trailing_pending.clone();
         let ws_send = ws_send.clone();
         let curve = curve;
 
@@ -178,6 +186,7 @@ pub fn JoystickArea(
             *last_sent_dir.borrow_mut() = Some(0.0);
             *last_sent_speed.borrow_mut() = Some(0.0);
             *trailing_timer.borrow_mut() = None;
+            trailing_pending.set(false);
             ws_send(0.0, 0.0);
             let _ = curve; // suppress unused warning
         }
@@ -194,6 +203,7 @@ pub fn JoystickArea(
         let last_sent_dir = last_sent_dir.clone();
         let last_sent_speed = last_sent_speed.clone();
         let trailing_timer = trailing_timer.clone();
+        let trailing_pending = trailing_pending.clone();
         let ws_send = ws_send.clone();
         let curve = curve;
 
@@ -240,6 +250,7 @@ pub fn JoystickArea(
             if elapsed >= INTERVAL_MS {
                 *last_send_at.borrow_mut() = now;
                 *trailing_timer.borrow_mut() = None;
+                trailing_pending.set(false);
 
                 // Dedup + keepalive check
                 let wrapped = wrap360(dir);
@@ -271,9 +282,17 @@ pub fn JoystickArea(
                 let last_sent_dir2 = last_sent_dir.clone();
                 let last_sent_speed2 = last_sent_speed.clone();
                 let ws_send2 = ws_send.clone();
-                if trailing_timer.borrow().is_none() {
+                // Gate on the flag, not on `trailing_timer`: the timer handle
+                // stays `Some` after firing, so testing it meant no further
+                // trailing flush was ever scheduled once one had run, and the
+                // final queued sample was stranded whenever pointer events
+                // stopped mid-interval (stick held steady, or a slow release).
+                if !trailing_pending.get() {
+                    trailing_pending.set(true);
+                    let trailing_pending2 = trailing_pending.clone();
                     let delay = ((INTERVAL_MS - elapsed).max(0.0)) as u32;
                     let timer = gloo_timers::callback::Timeout::new(delay, move || {
+                        trailing_pending2.set(false);
                         let t = performance_now();
                         *last_send_at2.borrow_mut() = t;
                         let wrapped = wrap360(dir_c);
@@ -314,6 +333,7 @@ pub fn JoystickArea(
         let last_sent_dir = last_sent_dir.clone();
         let last_sent_speed = last_sent_speed.clone();
         let trailing_timer = trailing_timer.clone();
+        let trailing_pending = trailing_pending.clone();
         let ws_send = ws_send.clone();
 
         move |ev: PointerEvent| {
@@ -339,6 +359,7 @@ pub fn JoystickArea(
 
             // Flush stop
             *trailing_timer.borrow_mut() = None;
+            trailing_pending.set(false);
             let now = performance_now();
             *last_send_at.borrow_mut() = now;
             *last_actual_emit_at.borrow_mut() = now;

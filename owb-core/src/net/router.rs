@@ -7,7 +7,7 @@ use picoserve::{
 
 use crate::net::{
     server::{frontend_index_response, API_SCHEMA_PAGE, HEALTHZ_PAGE, MINIMAL_INDEX_PAGE},
-    session::{now_millis, now_secs, SessionManager},
+    session::{next_lease_id, now_secs, SessionManager},
     websocket::{WebSocket, WsConnectionParams},
 };
 
@@ -30,7 +30,7 @@ where
                 tracing::warn!("control secret not configured; control surface is UNAUTHENTICATED");
             }
             let now = now_secs();
-            let lease_id = now_millis();
+            let lease_id = next_lease_id();
             let accepted = authorized
                 && SessionManager::try_acquire_session(session_id.clone(), now, lease_id).await;
             if authorized && !accepted {

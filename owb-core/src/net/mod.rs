@@ -12,7 +12,7 @@
 pub mod auth;
 
 #[cfg(feature = "net")]
-pub(crate) mod gateway;
+pub mod gateway;
 #[cfg(feature = "net")]
 pub mod router;
 /// HTTP server, routes, and message handling.

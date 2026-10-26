@@ -32,8 +32,8 @@ ESP_HAL_CONFIG_PLACE_ANON_IN_RAM="true"
 ESP_RADIO_CONFIG_WIFI_MTU="4000"
 ESP_RADIO_CONFIG_WIFI_MAX_BURST_SIZE="10"
 # WiFi packet-dump diagnostic (ESP_RADIO_CONFIG_DUMP_PACKETS): leave unset here
-# and enable per-build with `OWB_DUMP_PACKETS=1 ./scripts/run_app.sh ...` (wired in
-# scripts/makers/owb-esp.sh). Logs every rx/tx frame to localize the SoftAP
+# and enable per-build with `OWB_DUMP_PACKETS=1 ./owb build ...` (wired in
+# xtask/src/firmware.rs). Logs every rx/tx frame to localize the SoftAP
 # unicast-TCP delivery gap (backlog P1). Very verbose — do not ship enabled.
 # Dropped (no longer build-time config in esp-radio 1.0): COUNTRY_CODE,
 # TX_QUEUE_SIZE, STATIC_RX_BUF_NUM, DYNAMIC_RX_BUF_NUM, DYNAMIC_TX_BUF_NUM,

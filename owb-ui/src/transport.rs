@@ -94,13 +94,21 @@ struct Inner {
     ws: Option<WebSocket>,
     reconnect_delay: u32,
     _reconnect_timer: Option<gloo_timers::callback::Timeout>,
+    /// `Date.now()` of the last frame received (or of the open). A phone that
+    /// drops Wi-Fi often leaves the socket `OPEN` with no `onclose` for
+    /// minutes; [`WsClient::close_if_stale`] uses this to notice.
+    last_rx_ms: f64,
+    /// Held here, not on `WsClient`, so that `open_socket` can re-attach the
+    /// `onmessage` handler on every reconnect. The reconnect path used to live
+    /// in a separate copy of this wiring that had no access to the callback, so
+    /// the UI went permanently deaf after its first disconnect.
+    on_message: std::rc::Rc<dyn Fn(String)>,
 }
 
 /// WebSocket client. Constructed once in `App` and shared via signals.
 pub struct WsClient {
     url: String,
     conn_state: RwSignal<ConnState>,
-    on_message: std::rc::Rc<dyn Fn(String)>,
     inner: std::rc::Rc<std::cell::RefCell<Inner>>,
 }
 
@@ -113,11 +121,12 @@ impl WsClient {
         WsClient {
             url,
             conn_state,
-            on_message: std::rc::Rc::from(on_message),
             inner: std::rc::Rc::new(std::cell::RefCell::new(Inner {
                 ws: None,
                 reconnect_delay: RECONNECT_BASE_MS,
                 _reconnect_timer: None,
+                last_rx_ms: 0.0,
+                on_message: std::rc::Rc::from(on_message),
             })),
         }
     }
@@ -127,89 +136,35 @@ impl WsClient {
         if ws_opt == Some(WebSocket::OPEN) || ws_opt == Some(WebSocket::CONNECTING) {
             return;
         }
-        self.conn_state.set(ConnState::Connecting);
+        open_socket(&self.url, self.conn_state, &self.inner);
+    }
 
-        let ws = match WebSocket::new_with_str(&self.url, "messages") {
-            Ok(ws) => ws,
-            Err(_) => {
-                self.schedule_reconnect();
-                return;
-            }
+    /// Reconnect right away instead of waiting out the backoff -- for when the
+    /// page becomes visible again after the phone slept or switched networks.
+    pub fn reconnect_now(&self) {
+        {
+            let mut inner = self.inner.borrow_mut();
+            inner.reconnect_delay = RECONNECT_BASE_MS;
+            inner._reconnect_timer = None;
+        }
+        self.connect();
+    }
+
+    /// Close an `OPEN` socket that has received nothing for `stale_ms`, so the
+    /// normal `onclose` -> backoff path reconnects it. The app polls the
+    /// battery every 5 s and the bot answers, so silence means a dead link.
+    pub fn close_if_stale(
+        &self,
+        stale_ms: f64,
+    ) {
+        let stale = {
+            let inner = self.inner.borrow();
+            inner.ws.as_ref().map(|ws| ws.ready_state()) == Some(WebSocket::OPEN)
+                && js_sys::Date::now() - inner.last_rx_ms > stale_ms
         };
-
-        let conn_state = self.conn_state;
-        let inner_clone = self.inner.clone();
-        let url_clone = self.url.clone();
-
-        // onopen
-        {
-            let conn_state = conn_state;
-            let inner = inner_clone.clone();
-            let on_open_cb = Closure::<dyn FnMut()>::new(move || {
-                conn_state.set(ConnState::Open);
-                inner.borrow_mut().reconnect_delay = RECONNECT_BASE_MS;
-            });
-            ws.set_onopen(Some(on_open_cb.as_ref().unchecked_ref()));
-            on_open_cb.forget();
+        if stale {
+            self.close();
         }
-
-        // onclose
-        {
-            let conn_state = conn_state;
-            let inner = inner_clone.clone();
-            let url = url_clone.clone();
-            let on_close_cb = Closure::<dyn FnMut(CloseEvent)>::new(move |ev: CloseEvent| {
-                if ev.code() == 1008 {
-                    conn_state.set(ConnState::AuthError);
-                    return;
-                }
-                conn_state.set(ConnState::Closed);
-                // Schedule reconnect
-                let delay = {
-                    let mut guard = inner.borrow_mut();
-                    let d = guard.reconnect_delay;
-                    guard.reconnect_delay = (d * 2).min(RECONNECT_MAX_MS);
-                    d
-                };
-                let inner2 = inner.clone();
-                let url2 = url.clone();
-                let conn_state2 = conn_state;
-                let timer = gloo_timers::callback::Timeout::new(delay, move || {
-                    inner2.borrow_mut()._reconnect_timer = None;
-                    // Trigger a new connect by constructing a temporary client.
-                    // Since we can't call self.connect() from here, we
-                    // replicate the minimal connect logic.
-                    reconnect_ws(&url2, conn_state2, &inner2);
-                });
-                inner.borrow_mut()._reconnect_timer = Some(timer);
-            });
-            ws.set_onclose(Some(on_close_cb.as_ref().unchecked_ref()));
-            on_close_cb.forget();
-        }
-
-        // onerror
-        {
-            let conn_state = conn_state;
-            let on_error_cb = Closure::<dyn FnMut(ErrorEvent)>::new(move |_: ErrorEvent| {
-                conn_state.set(ConnState::Error);
-            });
-            ws.set_onerror(Some(on_error_cb.as_ref().unchecked_ref()));
-            on_error_cb.forget();
-        }
-
-        // onmessage
-        {
-            let on_msg = self.on_message.clone();
-            let on_message_cb = Closure::<dyn FnMut(MessageEvent)>::new(move |ev: MessageEvent| {
-                if let Some(txt) = ev.data().as_string() {
-                    on_msg(txt);
-                }
-            });
-            ws.set_onmessage(Some(on_message_cb.as_ref().unchecked_ref()));
-            on_message_cb.forget();
-        }
-
-        self.inner.borrow_mut().ws = Some(ws);
     }
 
     pub fn is_open(&self) -> bool {
@@ -247,27 +202,17 @@ impl WsClient {
             let _ = ws.close();
         }
     }
-
-    fn schedule_reconnect(&self) {
-        let delay = {
-            let mut guard = self.inner.borrow_mut();
-            let d = guard.reconnect_delay;
-            guard.reconnect_delay = (d * 2).min(RECONNECT_MAX_MS);
-            d
-        };
-        let inner = self.inner.clone();
-        let url = self.url.clone();
-        let conn_state = self.conn_state;
-        let timer = gloo_timers::callback::Timeout::new(delay, move || {
-            inner.borrow_mut()._reconnect_timer = None;
-            reconnect_ws(&url, conn_state, &inner);
-        });
-        self.inner.borrow_mut()._reconnect_timer = Some(timer);
-    }
 }
 
-/// Minimal reconnect helper used from timeout closures that can't borrow WsClient.
-fn reconnect_ws(
+/// Open a socket and wire up all four event handlers.
+///
+/// This is the single place sockets get created — used by the initial
+/// `connect()` and by every reconnect. It previously existed as two
+/// near-identical copies, and the reconnect copy omitted `onmessage`: after one
+/// disconnect the indicator went green and sends worked, but no telemetry, ack,
+/// or battery frame was ever delivered again until a page reload. Keep this
+/// unified — a handler added to a second copy would not survive reconnects.
+fn open_socket(
     url: &str,
     conn_state: RwSignal<ConnState>,
     inner: &std::rc::Rc<std::cell::RefCell<Inner>>,
@@ -276,66 +221,42 @@ fn reconnect_ws(
     let ws = match WebSocket::new_with_str(url, "messages") {
         Ok(ws) => ws,
         Err(_) => {
-            let delay = {
-                let mut guard = inner.borrow_mut();
-                let d = guard.reconnect_delay;
-                guard.reconnect_delay = (d * 2).min(RECONNECT_MAX_MS);
-                d
-            };
-            let inner2 = inner.clone();
-            let url2 = url.to_string();
-            let timer = gloo_timers::callback::Timeout::new(delay, move || {
-                reconnect_ws(&url2, conn_state, &inner2);
-            });
-            inner.borrow_mut()._reconnect_timer = Some(timer);
+            schedule_retry(url, conn_state, inner);
             return;
         }
     };
 
-    let inner_clone = inner.clone();
-    let url_clone = url.to_string();
-
+    // onopen
     {
-        let conn_state = conn_state;
-        let inner = inner_clone.clone();
+        let inner = inner.clone();
         let on_open_cb = Closure::<dyn FnMut()>::new(move || {
             conn_state.set(ConnState::Open);
-            inner.borrow_mut().reconnect_delay = RECONNECT_BASE_MS;
+            let mut inner = inner.borrow_mut();
+            inner.reconnect_delay = RECONNECT_BASE_MS;
+            inner.last_rx_ms = js_sys::Date::now();
         });
         ws.set_onopen(Some(on_open_cb.as_ref().unchecked_ref()));
         on_open_cb.forget();
     }
 
+    // onclose
     {
-        let conn_state = conn_state;
-        let inner = inner_clone.clone();
-        let url = url_clone.clone();
+        let inner = inner.clone();
+        let url = url.to_string();
         let on_close_cb = Closure::<dyn FnMut(CloseEvent)>::new(move |ev: CloseEvent| {
             if ev.code() == 1008 {
                 conn_state.set(ConnState::AuthError);
                 return;
             }
             conn_state.set(ConnState::Closed);
-            let delay = {
-                let mut guard = inner.borrow_mut();
-                let d = guard.reconnect_delay;
-                guard.reconnect_delay = (d * 2).min(RECONNECT_MAX_MS);
-                d
-            };
-            let inner2 = inner.clone();
-            let url2 = url.clone();
-            let timer = gloo_timers::callback::Timeout::new(delay, move || {
-                inner2.borrow_mut()._reconnect_timer = None;
-                reconnect_ws(&url2, conn_state, &inner2);
-            });
-            inner.borrow_mut()._reconnect_timer = Some(timer);
+            schedule_retry(&url, conn_state, &inner);
         });
         ws.set_onclose(Some(on_close_cb.as_ref().unchecked_ref()));
         on_close_cb.forget();
     }
 
+    // onerror
     {
-        let conn_state = conn_state;
         let on_error_cb = Closure::<dyn FnMut(ErrorEvent)>::new(move |_: ErrorEvent| {
             conn_state.set(ConnState::Error);
         });
@@ -343,5 +264,40 @@ fn reconnect_ws(
         on_error_cb.forget();
     }
 
+    // onmessage
+    {
+        let on_msg = inner.borrow().on_message.clone();
+        let inner_for_rx = inner.clone();
+        let on_message_cb = Closure::<dyn FnMut(MessageEvent)>::new(move |ev: MessageEvent| {
+            inner_for_rx.borrow_mut().last_rx_ms = js_sys::Date::now();
+            if let Some(txt) = ev.data().as_string() {
+                on_msg(txt);
+            }
+        });
+        ws.set_onmessage(Some(on_message_cb.as_ref().unchecked_ref()));
+        on_message_cb.forget();
+    }
+
     inner.borrow_mut().ws = Some(ws);
+}
+
+/// Arm the exponential-backoff timer for the next `open_socket` attempt.
+fn schedule_retry(
+    url: &str,
+    conn_state: RwSignal<ConnState>,
+    inner: &std::rc::Rc<std::cell::RefCell<Inner>>,
+) {
+    let delay = {
+        let mut guard = inner.borrow_mut();
+        let d = guard.reconnect_delay;
+        guard.reconnect_delay = (d * 2).min(RECONNECT_MAX_MS);
+        d
+    };
+    let inner2 = inner.clone();
+    let url2 = url.to_string();
+    let timer = gloo_timers::callback::Timeout::new(delay, move || {
+        inner2.borrow_mut()._reconnect_timer = None;
+        open_socket(&url2, conn_state, &inner2);
+    });
+    inner.borrow_mut()._reconnect_timer = Some(timer);
 }

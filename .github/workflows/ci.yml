@@ -57,8 +57,18 @@ jobs:
       - name: cargo test — owb-core (net + serde)
         run: cargo test -p owb-core --features net,serde
 
+      # The `sim` feature gates its own tests, which no job ran — `sim` was
+      # only ever `cargo check`ed, so sim-only regressions went undetected.
+      - name: cargo test — owb-core (sim)
+        run: cargo test -p owb-core --features sim
+
       - name: cargo test — owb-host-sim
         run: cargo test -p owb-host-sim
+
+      # owb-ui is a wasm crate but its pure helpers test fine on the host
+      # target, and CI previously only type-checked it for wasm32.
+      - name: cargo test — owb-ui (host target)
+        run: cargo test -p owb-ui
 
       - name: cargo check — owb-msg (serde)
         run: cargo check -p owb-msg --features serde
@@ -86,14 +96,19 @@ jobs:
         with:
           key: ${{ hashFiles('**/Cargo.lock') }}
 
+      # --all-targets so test and bench code is linted too. Without it a
+      # clippy error inside a `#[cfg(test)]` module passed CI unnoticed.
       - name: cargo clippy — owb-core (net + serde)
-        run: cargo clippy -p owb-core --features net,serde -- -D warnings
+        run: cargo clippy -p owb-core --features net,serde --all-targets -- -D warnings
+
+      - name: cargo clippy — owb-core (sim)
+        run: cargo clippy -p owb-core --features sim --all-targets -- -D warnings
 
       - name: cargo clippy — owb-host-sim
-        run: cargo clippy -p owb-host-sim -- -D warnings
+        run: cargo clippy -p owb-host-sim --all-targets -- -D warnings
 
       - name: cargo clippy — owb-msg
-        run: cargo clippy -p owb-msg --features serde -- -D warnings
+        run: cargo clippy -p owb-msg --features serde --all-targets -- -D warnings
 
   # ---------------------------------------------------------------------------
   # ui — type-check the Leptos WASM PWA.
@@ -179,6 +194,62 @@ jobs:
             --bin owb-esp \
             --no-default-features \
             --features esp32s3,real-executors,no-camera \
+            --ignore-rust-version
+
+      # The camera path is the DRAM/DMA-pressure configuration this job exists
+      # to protect, and it was never compiled here — only the no-camera variant
+      # was. Both camera formats are built because they take different
+      # `ov2640_init` / snap / stream branches.
+      - name: Build owb-esp (v1-alpha camera, YUV422)
+        working-directory: owb-bin/owb-esp
+        env:
+          CARGO_TARGET_DIR: /tmp/esp-target
+          CARGO_HOME: /home/esp/.cargo
+          RUSTUP_HOME: /home/esp/.rustup
+          HOME: /home/esp
+          OWB_IO_PROFILE: owb-esp32s3-v1-alpha
+        run: |
+          . /home/esp/export-esp.sh
+          rustup run esp cargo build \
+            --target xtensa-esp32s3-none-elf \
+            --bin owb-esp \
+            --features esp32s3,real-executors \
+            --ignore-rust-version
+
+      - name: Build owb-esp (v1-alpha camera, JPEG)
+        working-directory: owb-bin/owb-esp
+        env:
+          CARGO_TARGET_DIR: /tmp/esp-target
+          CARGO_HOME: /home/esp/.cargo
+          RUSTUP_HOME: /home/esp/.rustup
+          HOME: /home/esp
+          OWB_IO_PROFILE: owb-esp32s3-v1-alpha
+          OWB_CAMERA_FORMAT: jpeg
+        run: |
+          . /home/esp/export-esp.sh
+          rustup run esp cargo build \
+            --target xtensa-esp32s3-none-elf \
+            --bin owb-esp \
+            --features esp32s3,real-executors \
+            --ignore-rust-version
+
+      # owb-esp (~3,700 lines incl. board/real.rs and profile/mod.rs) was
+      # entirely unlinted: the `clippy` job only covers the host crates, which
+      # cannot build for Xtensa. Clippy has to run inside this container.
+      - name: Clippy owb-esp (Xtensa)
+        working-directory: owb-bin/owb-esp
+        env:
+          CARGO_TARGET_DIR: /tmp/esp-target-clippy
+          CARGO_HOME: /home/esp/.cargo
+          RUSTUP_HOME: /home/esp/.rustup
+          HOME: /home/esp
+          OWB_IO_PROFILE: owb-esp32s3-v1-alpha
+        run: |
+          . /home/esp/export-esp.sh
+          rustup run esp cargo clippy \
+            --target xtensa-esp32s3-none-elf \
+            --bin owb-esp \
+            --features esp32s3,real-executors \
             --ignore-rust-version
 
   # ---------------------------------------------------------------------------

@@ -144,6 +144,23 @@ pub enum I2CCommand {
         #[cfg_attr(feature = "serde", serde(default))]
         boost: f32,
     },
+    /// Toggle drive-loop experiments at runtime. A field left out keeps its
+    /// current value, so `{"ic":"drive_loop","pwm_stagger":true}` does not
+    /// silently switch the speed loop off.
+    DriveLoop {
+        /// Run the encoder PID speed loop in two-wheel mode (default open-loop).
+        #[cfg_attr(feature = "serde", serde(default))]
+        closed_loop: Option<bool>,
+        /// Offset W2's PWM pulse so the two motors do not switch on together.
+        #[cfg_attr(feature = "serde", serde(default))]
+        pwm_stagger: Option<bool>,
+        /// Log the speed-loop terms at info level (~4 Hz) for bench tuning.
+        #[cfg_attr(feature = "serde", serde(default))]
+        trace: Option<bool>,
+        /// Ceiling on the speed loop's duty, 0.1..=1.0.
+        #[cfg_attr(feature = "serde", serde(default))]
+        max_duty: Option<f32>,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]

@@ -246,7 +246,21 @@
   Estimate: 1-2h
   Outcome: the same firmware image can switch board modes without a rebuild.
 
-- [ ] P1: SoftAP TCP traffic from associated client never reaches the HTTP server.
+- [x] P1: SoftAP TCP traffic from associated client never reaches the HTTP server.
+  **Resolved 2026-10-24, phone-validated on the v1-alpha bench unit** (join,
+  DHCP, the Leptos UI, ~1,100 drive commands, and reconnect after the phone
+  dropped Wi-Fi). Three stacked causes:
+    1. CPU0 main-stack overflow. The stack is whatever DRAM1 leaves after .bss,
+       and the 100 KB `heap_allocator!` lives in .bss, so the stack was ~8-9 KB.
+       It grew down into the Wi-Fi blob's supplicant/hostapd state (`gWpaSm`,
+       `global_hapd`, ...). esp-hal 1.2's stack guard exposed it. Fixed:
+       HEAP_BYTES 100 -> 72 KB (stack ~36 KB).
+    2. Internal-heap starvation. Four PWA workers (~27 KB each) left ~1.3 KB of
+       internal heap, and the Wi-Fi driver could not let stations join. Fixed:
+       the worker futures and buffers live in PSRAM (`ui_assets.rs`).
+    3. Camera boards served the HIL page, not the UI, on :80, and that page never
+       sent the control key. Fixed: every board serves the PWA on :80.
+  The original investigation notes follow.
   Observed 2026-05-25 during the no-wifi e2e validation pass. Boot
   sequence: AP comes up cleanly (`SoftAP started at 192.168.4.1`),
   HTTP server binds (`Starting server at 192.168.4.1:80`), phone
@@ -559,7 +573,7 @@ stack = **`trouble-host` over the `esp-radio` `ble` controller**, and
   version coupling (see Dependency section). Effort: M–L.
 
 ### P1: SoftAP unicast bug (carried forward, see detailed entry above)
-- [ ] P1: SoftAP TCP/unicast frames never reach picoserve (DHCP works, HTTP
+- [x] P1 (resolved 2026-10-24; see the detailed entry): SoftAP TCP/unicast frames never reach picoserve (DHCP works, HTTP
   times out). Most-likely fix is `AccessPointConfig` completeness (channel,
   `max_connections`, beacon interval) — investigation path (a). BLE-first means
   this is no longer the only offline path, but still wanted for the browser UI.
@@ -604,8 +618,8 @@ model: the control surface drives physical motors and is moving to SoftAP/BLE, s
 - [ ] L4: Run a dependency `cargo-audit` + `cargo-geiger` pass (picoserve,
   esp-radio, serde_json). `unsafe` in-tree is hardware-init only (`AnyPin::steal`
   etc.) — not attacker-reachable.
-- L2/L3: No secrets logged; Python tooling (`tune.py`, `sync_backlog_issues.py`,
-  `alpha_*.py`) reviewed clean (list-form argv, no `eval`/`pickle`/`shell=True`).
+- L2/L3: No secrets logged; Python tooling (`tune.py` -- since ported to Rust as
+  `owb-tune` --, `sync_backlog_issues.py`, `alpha_*.py`) reviewed clean (list-form argv, no `eval`/`pickle`/`shell=True`).
   No action.
 
 ---
@@ -658,9 +672,11 @@ no `xtask`, no watch-reflash.
   run.log` + serial to the browser over the existing WebSocket. Human stays in one
   tab, clicks Flash, watches logs. Effort: M. (Alt: ratatui TUI — lower payoff since
   the web surface already exists.)
-- [ ] P2: Promote `tune.py` to first-class: remove hardcoded `ws://192.168.1.236/ws`
-  (line 49), add `--host/--url`/`--port`, support the C1 `?key=`, wire into `just`
-  and the deploy dashboard "Tune" sub-panel. Effort: S.
+- [ ] P2: Promote the tuner to first-class. Done 2026-10-23: `owb-tune` (an
+  `owb-host-sim` bin) replaces `tune.py`, with no hardcoded IP, `--host/--url/--port`,
+  the C1 `?key=`, and a 150 ms keepalive (tune.py sent each motion command once,
+  so the 300 ms deadman cut every timed run short). Remaining: wire into `just` and
+  the deploy dashboard "Tune" sub-panel. Effort: S.
 - [ ] P3: Unify the serial monitor (today `espflash --monitor` vs `screen` in
   `scripts/monitor.sh` diverge); consider `cargo-espflash` for build+flash+monitor.
 - [ ] P3: If the bash layer keeps growing, absorb `owb-run.sh` + maker plugins into a
@@ -670,9 +686,10 @@ no `xtask`, no watch-reflash.
 
 ## UI Items — Steps (for the SoftAP/BLE + auth work)
 
-Canonical UI source is `owb-ui/ts/src/`; `assets/script.js` + `index.bundled.html`
-are esbuild output — after any TS edit run `npm run build` in `owb-ui/ts` (done for
-the C1 key change this pass).
+Canonical UI source is the Leptos crate under `owb-ui/src/`; rebuild `dist/` with
+`trunk build --release` after edits. (The TypeScript UI these items were first done
+in was removed on 2026-10-23; `app.rs` carries the same `#key=`/`?key=`/localStorage
+resolution.)
 - [x] Control key entry: `main.ts` reads the secret from `#key=`/`?key=`/localStorage
   and appends `&key=` to the `/ws` URL (C1). Bundle rebuilt.
 - [ ] Auth UX: on a `1008 Unauthorized` close, show a "key required / wrong key"

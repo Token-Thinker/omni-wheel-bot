@@ -223,7 +223,8 @@ where
             | I2CCommand::IndicatorLed { .. }
             | I2CCommand::WheelTrim { .. }
             | I2CCommand::HeadingHold { .. }
-            | I2CCommand::StictionKick { .. } => Ok(None),
+            | I2CCommand::StictionKick { .. }
+            | I2CCommand::DriveLoop { .. } => Ok(None),
             I2CCommand::ReadEnv
             | I2CCommand::ReadPower
             | I2CCommand::ReadEncoders

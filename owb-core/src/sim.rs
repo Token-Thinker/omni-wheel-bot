@@ -50,7 +50,9 @@ impl Builder {
     /// Creates a builder with the default Omni-Wheel geometry.
     pub fn new() -> Self {
         Self {
-            wheel_radius: 0.148,
+            // 38 mm Nexus omni wheel => 19 mm radius, in metres. Matches the
+            // firmware's `DEFAULT_DRIVE_TUNING.wheel_radius_m`.
+            wheel_radius: 0.019,
             robot_radius: 0.195,
             max_wheel_rad_s: DEFAULT_MAX_WHEEL_RAD_S,
         }

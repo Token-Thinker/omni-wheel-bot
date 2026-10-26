@@ -1,0 +1,6 @@
+# `cargo xtask <cmd>` runs the repo's build/flash/monitor tooling (xtask/).
+# See https://github.com/matklad/cargo-xtask. On a machine with Docker but no
+# Rust toolchain, use the `./owb` launcher instead: it runs the same xtask
+# inside the espressif/idf-rust image.
+[alias]
+xtask = "run --package xtask --"

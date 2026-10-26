@@ -27,13 +27,13 @@ jobs:
           persist-credentials: false
 
       - name: OSSF Scorecard
-        uses: ossf/scorecard-action@v2.4.4 # v2.4.4
+        uses: ossf/scorecard-action@55891bbd73f2425e97637d96e306fc9d491d0b21 # v2.4.4
         with:
           results_file: scorecard-results.sarif
           results_format: sarif
           # publish_results requires a PUBLIC repo to post to api.securityscorecards.dev.
           # Set to true and re-enable the SARIF upload step once the repo is public.
-          publish_results: false
+          publish_results: true
 
       # Uncomment when the repo is made public (SARIF upload needs GitHub Advanced Security).
       # - name: Upload SARIF to GitHub Security tab
