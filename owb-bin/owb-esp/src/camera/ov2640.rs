@@ -291,7 +291,7 @@ pub const OV2640_SETTINGS_TO_CIF: &[(u8, u8)] = &[
     (VHYX, 0x00),
     (TEST, 0x00),
     (CTRL2, CTRL2_DCW_EN | 0x1d),
-    (CTRLI, CTRLI_LP_DP | 0x00),
+    (CTRLI, CTRLI_LP_DP),
     (0, 0),
 ];
 

@@ -177,15 +177,12 @@ fn probe_tca9555(i2c: &mut I2c<'_, Blocking>) -> Option<u8> {
 fn probe_lis2dh12(i2c: &mut I2c<'_, Blocking>) -> bool {
     for addr in [LIS_ADDR_LOW, LIS_ADDR_HIGH] {
         let mut imu = Lis2dh12::new(&mut *i2c, addr);
-        match imu.who_am_i() {
-            Ok(who) => {
-                info!(
-                    "board probe: LIS2DH12 @0x{addr:02X} whoami=0x{who:02X} expected=0x{:02X}",
-                    WHO_AM_I_RESPONSE
-                );
-                return true;
-            }
-            Err(_) => {}
+        if let Ok(who) = imu.who_am_i() {
+            info!(
+                "board probe: LIS2DH12 @0x{addr:02X} whoami=0x{who:02X} expected=0x{:02X}",
+                WHO_AM_I_RESPONSE
+            );
+            return true;
         }
     }
     warn!("board probe: LIS2DH12 missing on 0x18/0x19");
@@ -195,6 +192,15 @@ fn probe_lis2dh12(i2c: &mut I2c<'_, Blocking>) -> bool {
 fn probe_hdc2010(i2c: &mut I2c<'_, Blocking>) -> bool {
     for addr in [HDC_ADDR_LOW, HDC_ADDR_HIGH] {
         let mut sensor = Hdc2010::new(&mut *i2c, addr);
+        // The HDC2010 powers up idle and never converts on its own, so without
+        // this the data registers read 0x0000 and decode to exactly -40.0 C /
+        // 0.0 % — which is what this probe printed on hardware. Start 1 Hz
+        // auto-measurement, then wait out the first conversion (~1.3 ms for
+        // 14-bit temp+humidity) before reading.
+        if sensor.init().is_err() {
+            continue;
+        }
+        esp_hal::delay::Delay::new().delay_millis(20);
         if let (Ok(temp), Ok(humidity)) =
             (sensor.read_temperature_c(), sensor.read_humidity_percent())
         {

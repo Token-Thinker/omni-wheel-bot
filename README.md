@@ -53,7 +53,7 @@ site:
 - `owb-bin/owb-esp/`: ESP32-S3 firmware using `esp-hal`, `esp-radio`/`esp-rtos`, and Embassy. `owb-bin/owb-esp/src/profile/mod.rs` defines board behavior (camera, motor, and IO profile data); the default profile is the current v2 custom board (`owb-esp32s3-v2`). Only `esp32s3` is supported; legacy ESP32 (non-S3) targets were removed in v0.1.9.
   Custom S3 profiles perform a boot-time I2C self-test (TCA9555, LIS2DH12, HDC2010, MAX17048). By default the firmware keeps the shadow executor for safe bring-up; `--real-executors` enables the GPIO-backed DRV8845 runtime for the supported ESP32-S3 boards before HIL.
 - `owb-bin/owb-host-sim/`: Host simulator (tokio + axum) to test UI + WebSocket without flashing hardware. Ships the `/sim` physics replay viewer (see Quick Start).
-- `owb-ui/`: Embedded operator UI assets shipped as a Rust crate. HTML + CSS are hand-written; `assets/script.js` is the compiled output from the TypeScript source under `owb-ui/ts/`. Consumed by `owb-core` via the `owb-ui` feature (auto-enabled by `net`).
+- `owb-ui/`: Operator UI written in Rust (Leptos, compiled to WebAssembly with Trunk). The built `dist/` is checked in and embedded in the firmware by `owb-bin/owb-esp/src/ui_assets.rs`; see [`owb-ui/README.md`](owb-ui/README.md).
 
 ## Current Board Matrix
 
@@ -92,14 +92,7 @@ cargo run -p owb-host-sim
 Quick MVP smoke test:
 
 ```bash
-./scripts/e2e_host_sim.sh
-```
-
-For repeated build/flash/test loops without retyping flags, or via `just`:
-
-```bash
-./scripts/run_app.sh
-# or: just build / just flash / just monitor / just probe
+cargo xtask e2e      # or: ./owb e2e
 ```
 
 - WebSocket endpoint: `ws://127.0.0.1:3000/ws`
@@ -109,79 +102,45 @@ For repeated build/flash/test loops without retyping flags, or via `just`:
 
 Only `esp32s3` is supported; legacy ESP32 (non-S3) targets were removed in v0.1.9.
 
+Build, flash and monitor are a Rust `cargo xtask` tool (`xtask/`). The `./owb`
+launcher runs it with your local Rust if you have it, and otherwise inside the
+`espressif/idf-rust` Docker image, so a machine with only Docker can build and
+flash too. The firmware itself is always cross-compiled in that image.
+
 ```bash
-chmod +x scripts/run_app.sh
-./scripts/run_app.sh          # guided build/flash/monitor
-# or use ./scripts/run_app.sh --help for flags / shortcuts
+./owb build --profile owb-esp32s3-v1-alpha --real-executors --force-softap
+./owb flash --port /dev/ttyACM0            # flashes the newest build, then monitors
+./owb build-flash --last --port /dev/ttyACM0
+./owb monitor --port /dev/ttyACM0 --reset
+# same recipes via just: just build / just flash / just monitor / just probe
 ```
 
-- The script sets up the xtensa toolchain in Docker and prompts for Wi‑Fi credentials.
-- For ESP builds, it prompts for an IO profile first and passes it to the build as `OWB_IO_PROFILE`.
-- Add `--real-executors` to enable the hardware-backed `esp32s3` GPIO runtime.
-- Add `--hil-low-mode` to build a safer bench-test runtime with reduced motor authority (intended for HIL bring-up on breadboard/new wiring).
-- For ESP32-S3 `real-executors`, normal drive mode serves the normal embedded
-  frontend; `--hil-low-mode` serves the compact HIL test page instead.
-- The HIL test page supports motor identity, encoder sign, `counts -> rad/s`,
-  and per-wheel PID probes; see `docs/motor_feedback_hil.md`.
-- Requires a serial device (e.g., `/dev/ttyUSB0`).
+- `--profile` picks the IO profile (`IO_PROFILE` env also works); unknown names
+  are rejected rather than silently falling back to the default board.
+- `--real-executors` enables the hardware-backed GPIO runtime.
+- `--hil-low-mode` builds a safer bench runtime with reduced motor authority and
+  serves the compact HIL test page (motor identity, encoder sign,
+  `counts -> rad/s`, per-wheel PID probes; see `docs/motor_feedback_hil.md`).
+- Wi-Fi comes from the `SSID` / `PASSWORD` env vars (never a flag, so it stays
+  out of shell history), a prompt on a TTY, or `--force-softap` to skip STA and
+  serve `OWB-BOT` at `192.168.4.1`. Credentials are never written to disk.
+- `--last` reuses the profile and port saved in `.owb_last_target`; `--dry-run`
+  prints the exact `docker` / `espflash` commands instead of running them.
+- Without a TTY, a missing choice is an immediate error naming the flag to pass.
 
-## Run Application (scripts/run_app.sh)
-
-The run application is modular and extendable via a `scripts/` directory. `scripts/run_app.sh` is the entrypoint; helper scripts live under `scripts/`, and maker‑specific adapters live under `scripts/makers/`. `justfile` wraps the common cases (`just build`, `just flash`, `just monitor`, `just probe`).
-
-- scripts/lib.sh: colors, prompts, board→triple mapping, serial detection.
-- scripts/select_target.sh: interactive target selection (supports TUI).
-- scripts/prompt_wifi.sh: Wi‑Fi prompt with optional test network.
-- scripts/build.sh: dispatches to a maker plugin for building.
-- scripts/flash.sh: dispatches to a maker plugin for flashing.
-- scripts/monitor.sh: serial monitor helper.
-- scripts/info.sh: `--list`, `--probe`, and `--probe-board` commands.
-- scripts/select_profile.sh: picks ESP32-S3 IO profiles and exports `OWB_IO_PROFILE` for the build.
-- scripts/ui.sh: optional TUI powered by `fzf` or `whiptail`.
-- scripts/state.sh: saves last target selection to `.owb_last_target` (no Wi‑Fi saved).
-
-Supported makers and examples:
-- owb-esp (ESP32-S3):
-  - Interactive: `./scripts/run_app.sh`
-  - Non‑interactive: `./scripts/run_app.sh --maker owb-esp --board esp32s3 --bin owb-esp --use-test-network`
-  - Uses Docker image `espressif/idf-rust`, prints `rustc --version --verbose` and active toolchain from inside the container.
-- owb-host-sim (host simulator):
-  - Build only: `./scripts/run_app.sh --maker owb-host-sim --board host --bin owb-host-sim --build`
-  - Build + run: `./scripts/run_app.sh --maker owb-host-sim --board host --bin owb-host-sim`
-  - Run directly: `cargo run -p owb-host-sim`
-  - Prints local `rustc --version --verbose` and `rustup show active-toolchain` before the build.
-
-Discover and probe:
-- `./scripts/run_app.sh --list` prints detected makers, supported boards, and available binaries.
-- `./scripts/run_app.sh --probe` shows the workspace Rust version, detected serial ports, and tools (docker, espflash, screen, elf2uf2-rs, openocd, dfu-util).
-- `./scripts/run_app.sh --probe-board` prints USB board identity and suggested target mapping.
-
-Non‑interactive flags:
-- `--maker NAME` `--board NAME` `--bin NAME` `--port PATH`
-- `--ssid SSID` `--password PASS` `--use-test-network` (reads `OWB_WIFI_SSID`/`OWB_WIFI_PASSWORD` from env; see `.env.example`)
-- `--force-softap` (skip STA credentials and serve OWB-BOT at `192.168.4.1`)
-- `--no-attach-monitor` (don't attach serial monitor during flash)
-- `--last` (reuse last maker/board/bin selection; saved in `.owb_last_target`)
-- `--tui` / `--no-tui` (force enable/disable TUI menus; default auto)
-- `--dry-run` (print actions without executing)
-- `--real-executors` (enable hardware-backed executors for supported ESP targets)
-- `--hil-low-mode` (reduce motor authority and serve the compact HIL test page)
-- `--normal-drive-mode` (explicitly disable HIL low mode)
-- `--auto-flash-on-test` (automatically flash after build when using the test network)
-
-Interactive quality‑of‑life:
-- Before flashing you can choose to flash now, change target, or exit.
-- After finishing, you can pick another board or exit to loop runs smoothly.
+Other subcommands (`cargo xtask --help` for all flags):
+- `./owb probe` identifies connected boards from USB data (never opens a port).
+- `./owb info` shows the toolchain, Docker image, serial ports and profiles.
+- `./owb ci [check|build|publish-dry|esp32s3|all]` runs the CI checks locally.
+- `./owb sim` runs the host simulator.
 
 DevKit breadboard wiring overrides:
 - Put local GPIO exports in `config/devkit_wiring.local.env`
 - Start from [config/devkit_wiring.local.env.example](config/devkit_wiring.local.env.example)
-- The file is loaded automatically by `scripts/run_app.sh`
+- The file is loaded automatically by `xtask build`
 
 Notes:
-- The deployer never writes Wi‑Fi credentials to disk. The optional test network is public: SSID=`iot`, PASSWORD=`12345678`.
 - ESP32-S3 behavior comes from `owb-bin/owb-esp/src/profile/mod.rs` (default: `owb-esp32s3-v2`).
-- Non‑ESP makers (e.g., RP2040/STM32) are scaffolded with "coming soon" flash flows; they already build with the correct Rust target triples.
 
 ### Core library (no‑std)
 

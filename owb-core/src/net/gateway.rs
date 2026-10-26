@@ -17,7 +17,11 @@ use crate::{
     },
 };
 
-pub(crate) fn command_requires_reply(cmd: &SystemCommand) -> bool {
+/// True when `cmd` produces a [`CommandReply`] the caller should wait for.
+///
+/// Public so non-WebSocket transports (the USB-serial control path) can use the
+/// same predicate rather than maintaining a second list that could drift.
+pub fn command_requires_reply(cmd: &SystemCommand) -> bool {
     is_zero_motion_command(cmd)
         || matches!(
             cmd,
@@ -63,23 +67,44 @@ fn command_reply_value(reply: CommandReply) -> serde_json::Value {
         CommandReply::Err => {
             json!({"type":"ack","status":"error","message":"executor_error"})
         }
-        CommandReply::ImuData(data) => json!({
-            "type":"imu",
-            "status":"ok",
-            "data": {
-                "accel": {
-                    "x": data.accel.0,
-                    "y": data.accel.1,
-                    "z": data.accel.2,
-                },
-                "gyro": {
-                    "x": data.gyro.0,
-                    "y": data.gyro.1,
-                    "z": data.gyro.2,
-                },
-                "temp_c": data.temp,
-            }
-        }),
+        CommandReply::ImuData(data) => {
+            // Derive attitude here rather than on the board so every transport
+            // reports the same numbers from the same accel sample. `null` means
+            // the sample carried no usable direction (free fall / dead sensor),
+            // which is deliberately distinct from "level".
+            let tilt = crate::drivers::lis2dh12::tilt_from_accel_g(
+                data.accel.0,
+                data.accel.1,
+                data.accel.2,
+            );
+            json!({
+                "type":"imu",
+                "status":"ok",
+                "data": {
+                    "accel": {
+                        "x": data.accel.0,
+                        "y": data.accel.1,
+                        "z": data.accel.2,
+                    },
+                    // Always zero: this board's LIS2DH12 has no rate sensor.
+                    // Retained for wire compatibility, not a measurement.
+                    "gyro": {
+                        "x": data.gyro.0,
+                        "y": data.gyro.1,
+                        "z": data.gyro.2,
+                    },
+                    "temp_c": data.temp,
+                    "tilt": tilt.map(|t| json!({
+                        "roll_deg": t.roll_deg,
+                        "pitch_deg": t.pitch_deg,
+                        "gravity_error_g": t.gravity_error_g,
+                        // False while the robot is accelerating: the angles are
+                        // then contaminated by motion, not orientation.
+                        "trustworthy": t.is_trustworthy(),
+                    })),
+                }
+            })
+        }
         CommandReply::EnvData(data) => json!({
             "type":"env",
             "status":"ok",
@@ -107,12 +132,42 @@ fn command_reply_value(reply: CommandReply) -> serde_json::Value {
     }
 }
 
+/// Discard replies left over from a previously cancelled query.
+///
+/// `COMMAND_QUERY_LOCK` serializes queries, but it cannot prevent a query
+/// future from being *dropped* between its send and its receive — which happens
+/// routinely when a client disconnects mid-request. The bus still executes that
+/// command and queues its reply, so without this drain the next query would
+/// receive the previous query's answer (ask for `ReadPower`, get `imu`) and stay
+/// permanently off by one.
+///
+/// Must be called while holding `COMMAND_QUERY_LOCK`, before sending.
+fn drain_orphaned_replies() {
+    while COMMAND_REPLY_BUS.try_receive().is_ok() {
+        tracing::warn!(
+            target: "owb::gateway",
+            "discarded orphaned reply from a cancelled query"
+        );
+    }
+}
+
+/// Render a reply using the exact wire shape the WebSocket transport emits.
+///
+/// Exposed so the USB-serial transport reports sensor reads in the same JSON as
+/// the network path, instead of formatting its own and letting the two drift.
+pub fn command_reply_to_json(reply: CommandReply) -> String {
+    serde_json::to_string(&command_reply_value(reply)).unwrap_or_else(|_| {
+        String::from(r#"{"type":"ack","status":"error","message":"encode_failed"}"#)
+    })
+}
+
 pub(crate) async fn dispatch_text_command(
     cmd: SystemCommand,
     received_ms: u64,
 ) -> Option<String> {
     if command_requires_reply(&cmd) {
         let _query_guard = COMMAND_QUERY_LOCK.lock().await;
+        drain_orphaned_replies();
         COMMAND_BUS
             .send(CommandEnvelope {
                 cmd,
@@ -158,6 +213,7 @@ pub(crate) async fn dispatch_binary_command(
 ) -> Option<Vec<u8>> {
     if command_requires_reply(&cmd) {
         let _query_guard = COMMAND_QUERY_LOCK.lock().await;
+        drain_orphaned_replies();
         COMMAND_BUS
             .send(CommandEnvelope {
                 cmd,

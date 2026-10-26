@@ -76,6 +76,12 @@ pub mod sim;
     note = "renamed to `ctrl`; use `owb_core::ctrl` instead"
 )]
 pub use ctrl as controllers;
+/// Short alias for [`motion::kinematics::EmbodiedKinematics`].
+///
+/// The lowercase name is deliberately unconventional for a type — it reads as a
+/// module at call sites like `ek::new_with_angles(..)`. It is kept because it is
+/// part of this crate's published surface, so renaming it is a breaking change
+/// rather than a tidy-up. Prefer the full type name in new code.
 pub use motion::kinematics::EmbodiedKinematics as ek;
 
 #[macro_export]

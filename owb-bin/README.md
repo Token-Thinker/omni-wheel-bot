@@ -34,7 +34,7 @@ boards while keeping application logic in the shared `owb-core` crate.
   - Reuses the shared `owb-core` web app surface (`/`, `/setup`, `/ws`) and only keeps the board-specific camera stream handler in the binary.
   - Current baseline is camera/network-first, with the shared `owb-core` runtime owning the app shell and command loop.
   - Custom ESP32-S3 profiles run a boot-time board self-test for the shared I2C parts.
-  - By default, ESP32-S3 builds keep the shadow executor for safe bring-up; pass `--real-executors` through `scripts/run_app.sh` to enable the GPIO-backed DRV8845 runtime on the supported custom boards before HIL.
+  - By default, ESP32-S3 builds keep the shadow executor for safe bring-up; pass `--real-executors` to `cargo xtask build` (or `./owb build`) to enable the GPIO-backed DRV8845 runtime on the supported custom boards before HIL.
   - Current ESP32-S3 profile names:
     - `xiao-seedstudio-sense-cam`
     - `esp32-s3-devkitc-1-n32r16`
@@ -60,22 +60,21 @@ Active targets should:
 
 ## Building
 
-Use the workspace `scripts/run_app.sh` for a guided build/flash flow (or the
-`justfile` shortcuts). For ESP32‑S3:
+Build and flash from the repo root with `cargo xtask`, or `./owb` on a machine
+that has Docker but no Rust (see the root README). For ESP32‑S3:
 
 ```bash
-chmod +x ../scripts/run_app.sh
-../scripts/run_app.sh
-# or from the repo root: just build / just flash / just monitor
+./owb build-flash --profile owb-esp32s3-v1-alpha --real-executors --port /dev/ttyACM0
+# or: just build / just flash / just monitor
 ```
 
-Select `esp32s3` and `owb-esp`, then follow prompts. The script manages the
-toolchain/targets and will ask for Wi‑Fi credentials as needed. Add
+The firmware is cross-compiled in the `espressif/idf-rust` image. Wi‑Fi comes
+from the `SSID`/`PASSWORD` env vars, a prompt, or `--force-softap`. Add
 `--real-executors` when you want the custom S3 boards to drive their real
 GPIO-backed motor runtime instead of the shadow executor.
 
 For the host simulator MVP path, use the repository-level smoke test:
 
 ```bash
-./scripts/e2e_host_sim.sh
+cargo xtask e2e
 ```

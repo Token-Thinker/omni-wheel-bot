@@ -1,5 +1,10 @@
 # OWB — just --list for the full cheat-sheet
 # Requires: just (https://github.com/casey/just)
+#
+# Firmware recipes go through ./owb, which runs `cargo xtask ...` on the host
+# when Rust is installed and inside the espressif/idf-rust image otherwise
+# (Docker-only machines). Extra flags pass through, e.g.
+#   just build --profile owb-esp32s3-v1-alpha --real-executors --force-softap
 
 # Default: list all recipes
 default:
@@ -18,16 +23,16 @@ sim-watch:
 # --- Build ---
 
 # Build the ESP32-S3 firmware via Docker cross-compile (no flash)
-build:
-    ./scripts/run_app.sh --maker owb-esp --board esp32s3 --bin owb-esp --build
+build *ARGS:
+    ./owb build {{ARGS}}
 
 # Build with hardware-backed board executors enabled
-build-real:
-    ./scripts/run_app.sh --maker owb-esp --board esp32s3 --bin owb-esp --build --real-executors
+build-real *ARGS:
+    ./owb build --real-executors {{ARGS}}
 
 # Build with HIL low-authority mode (safer bench testing)
-build-hil:
-    ./scripts/run_app.sh --maker owb-esp --board esp32s3 --bin owb-esp --build --hil-low-mode
+build-hil *ARGS:
+    ./owb build --hil-low-mode {{ARGS}}
 
 # --- Flash & Monitor ---
 
@@ -35,26 +40,30 @@ build-hil:
 PORT := "/dev/ttyACM0"
 
 # Flash ESP32-S3 and attach serial monitor
-flash:
-    ./scripts/run_app.sh --maker owb-esp --board esp32s3 --bin owb-esp --flash --port {{PORT}}
+flash *ARGS:
+    ./owb flash --port {{PORT}} {{ARGS}}
 
 # Flash without attaching serial monitor afterwards
-flash-quiet:
-    ./scripts/run_app.sh --maker owb-esp --board esp32s3 --bin owb-esp --flash --port {{PORT}} --no-attach-monitor
+flash-quiet *ARGS:
+    ./owb flash --port {{PORT}} --no-monitor {{ARGS}}
 
 # Build then flash in one step
-build-flash:
-    ./scripts/run_app.sh --maker owb-esp --board esp32s3 --bin owb-esp --build --flash --port {{PORT}}
+build-flash *ARGS:
+    ./owb build-flash --port {{PORT}} {{ARGS}}
 
-# Attach serial monitor to a running board (uses screen)
-monitor:
-    ./scripts/run_app.sh --maker owb-esp --board esp32s3 --bin owb-esp --monitor --port {{PORT}}
+# Attach serial monitor to a running board (no reset; add --reset for the boot log)
+monitor *ARGS:
+    ./owb monitor --port {{PORT}} {{ARGS}}
 
 # --- Probe ---
 
 # Probe attached serial targets and suggest board/port mappings
 probe:
-    ./scripts/run_app.sh --probe-board
+    ./owb probe
+
+# Toolchain, Docker image, serial ports and IO profiles
+info:
+    ./owb info
 
 # --- Check / Test ---
 
@@ -85,6 +94,14 @@ ui-check:
 
 # Run all host-side checks including WASM UI
 check-all: check ui-check
+
+# Local parity for the GitHub Actions host jobs (check|build|publish-dry|esp32s3|all)
+ci TARGET="all":
+    ./owb ci {{TARGET}}
+
+# Host-sim end-to-end smoke test
+e2e:
+    ./owb e2e
 
 # --- USB serial control (bot must be plugged in) ---
 

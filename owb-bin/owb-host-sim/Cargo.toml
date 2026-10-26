@@ -2,6 +2,24 @@
 name = "owb-host-sim"
 version = "0.1.0"
 edition = "2021"
+# Two bins live here; keep bare `cargo run -p owb-host-sim` resolving to the server.
+default-run = "owb-host-sim"
+
+# Bring-up assertion harness. A separate binary so the check tool does not
+# drag in the sim server's axum/tower stack at runtime.
+[[bin]]
+name = "hil-check"
+path = "src/bin/hil_check.rs"
+
+# Wheel-tuning rig (Rust port of scripts/tune.py): a WebSocket client that
+# drives probe/drive/trim runs against a bot or this sim.
+[[bin]]
+name = "owb-tune"
+path = "src/bin/owb_tune.rs"
+
+[[bin]]
+name = "owb-host-sim"
+path = "src/main.rs"
 
 [dependencies]
 owb-core = { path = "../../owb-core", features = ["serde", "sim"] }
@@ -10,9 +28,15 @@ owb-core = { path = "../../owb-core", features = ["serde", "sim"] }
 tower-http = { version = "0.5", features = ["fs"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "sync"] }
 axum = { version = "0.7", features = ["ws"] }
-tower = { version = "0.4" }
-tracing = "0.1"
+tracing = "0.1.44"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 futures-util = "0.3"
+# Serial link for the hardware-in-the-loop bridge (OWB_HIL_SERIAL). Default
+# features (libudev port enumeration) are unneeded — we open a known path.
+serialport = { version = "4", default-features = false }
+# Blocking WebSocket client for owb-tune. Already in the lock file via axum's
+# `ws` feature (tokio-tungstenite 0.24), so this adds no new crates; the sync
+# API keeps the tuner a plain loop instead of an async state machine.
+tungstenite = { version = "0.24", default-features = false, features = ["handshake"] }

@@ -5,7 +5,7 @@ use esp_hal::{
     Blocking,
 };
 #[cfg(feature = "real-executors")]
-use log::{info, warn};
+use log::{debug, info, warn};
 #[cfg(feature = "real-executors")]
 use owb_core::{
     ctrl::{
@@ -32,6 +32,14 @@ use super::BoardCapabilities;
 use crate::profile::{BoardProfile, I2cPins};
 
 #[cfg(feature = "real-executors")]
+/// TCA9555 port1 bits driven as indicator LEDs (power, wifi, user).
+///
+/// `write_state` claims the whole expander on every update: it configures port0
+/// entirely as outputs and drives it to `0`, and masks port1 to these bits. That
+/// is fine while the LEDs are the only thing on the chip, but it will fight any
+/// future co-tenant. `owb_core::drivers::tof::TCA9555_INDICATOR_PORT1_MASK`
+/// mirrors this value and must be kept in step -- the planned ToF LPn lines
+/// currently overlap it (see that module's tests).
 const INDICATOR_LED_MASK: u8 = 0b0000_0111;
 #[cfg(feature = "real-executors")]
 const INDICATOR_POWER_BIT: u8 = 0b0000_0001;
@@ -234,6 +242,12 @@ impl OnboardLis2dh12Imu {
 
     pub(super) fn read(&mut self) -> ImuData {
         if !self.enabled {
+            // Every other failure path here warns, so a zeroed reading used to
+            // be indistinguishable from a dead sensor. Note the coupling: the
+            // motor `Disable` command also disables the IMU, so a plain
+            // `read_imu` after `disable` legitimately reports all zeros with
+            // `tilt: null`.
+            debug!("board imu: read while disabled; reporting zeros");
             return ImuData::default();
         }
 
@@ -247,7 +261,16 @@ impl OnboardLis2dh12Imu {
         match sensor.read_accel_g() {
             Ok((x, y, z)) => ImuData {
                 accel: (x, y, z),
+                // The LIS2DH12 is an accelerometer with no rate sensor, so
+                // these are placeholders to satisfy the shared `ImuData` shape
+                // — NOT a measurement of "not rotating". Yaw rate is simply
+                // unobservable on this board; heading comes from wheel
+                // odometry. Roll/pitch are derived from `accel` by the gateway
+                // via `owb_core::drivers::lis2dh12::tilt_from_accel_g`.
                 gyro: (0.0, 0.0, 0.0),
+                // Likewise unpopulated: the part's internal temperature sensor
+                // is relative and uncalibrated, and the HDC2010 already
+                // provides a real ambient reading via `read_env`.
                 temp: 0.0,
             },
             Err(_) => {
@@ -271,6 +294,14 @@ impl OnboardHdc2010Sensor {
         for address in [HDC_ADDR_LOW, HDC_ADDR_HIGH] {
             let bus = open_shared_i2c(profile.i2c_bus)?;
             let mut sensor = Hdc2010::new(bus, address);
+            // Put the device into 1 Hz auto-measurement once, here at setup.
+            // `read` below reconstructs the driver on every call, so it has no
+            // place to keep state — but AMM lives in the device, so a single
+            // init keeps every later read returning a fresh conversion instead
+            // of the power-on 0x0000 (which decodes to -40.0 C / 0.0 %).
+            if sensor.init().is_err() {
+                continue;
+            }
             if sensor.read_temperature_c().is_ok() && sensor.read_humidity_percent().is_ok() {
                 return Some(Self {
                     pins: profile.i2c_bus,

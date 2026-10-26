@@ -6,6 +6,7 @@
 use std::rc::Rc;
 
 use leptos::prelude::*;
+use wasm_bindgen::{prelude::Closure, JsCast};
 
 use crate::{
     components::{
@@ -31,10 +32,16 @@ fn resolve_ws_url(control_key: &str) -> String {
     let query = loc.search().unwrap_or_default();
     let query_params = web_sys::UrlSearchParams::new_with_str(&query.trim_start_matches('?')).ok();
 
-    let host = hash_params
+    // A host supplied by the *link* is attacker-controllable; one coming from
+    // localStorage was entered deliberately via the settings drawer. Track
+    // which, because the control key must never be handed to the former.
+    let host_from_link = hash_params
         .as_ref()
         .and_then(|p| p.get("host"))
-        .or_else(|| query_params.as_ref().and_then(|p| p.get("host")))
+        .or_else(|| query_params.as_ref().and_then(|p| p.get("host")));
+    let host_came_from_link = host_from_link.is_some();
+
+    let host = host_from_link
         // Reject the old "owb.local" default if it was saved to storage by a
         // previous load — it was never a real mDNS name on this bot.
         .or_else(|| {
@@ -54,8 +61,6 @@ fn resolve_ws_url(control_key: &str) -> String {
             format!("{}//{}/ws", ws_proto, page_host)
         });
 
-    storage::set(storage::KEY_HOST, &host);
-
     // Mint a random session id
     let session_id = format!(
         "ui-{:08x}",
@@ -65,8 +70,20 @@ fn resolve_ws_url(control_key: &str) -> String {
     // Build URL with session + key params
     let url = web_sys::Url::new(&host)
         .unwrap_or_else(|_| web_sys::Url::new("ws://owb.local/ws").unwrap());
+
+    // A link-supplied host is only trusted when it points back at the page's
+    // own origin. Otherwise `https://bot/?host=ws://attacker/ws` would make the
+    // PWA hand the saved control key to an arbitrary server — and, once
+    // persisted, keep doing so on every subsequent load.
+    let page_host = loc.host().unwrap_or_default();
+    let trusted_host = !host_came_from_link || url.host() == page_host;
+
+    if trusted_host {
+        storage::set(storage::KEY_HOST, &host);
+    }
+
     url.search_params().set("session", &session_id);
-    if !control_key.is_empty() {
+    if !control_key.is_empty() && trusted_host {
         url.search_params().set("key", control_key);
     }
     url.href()
@@ -119,6 +136,10 @@ pub fn App() -> impl IntoView {
     let battery_label = RwSignal::new(String::from("--%"));
     let drawer_open = RwSignal::new(false);
     let camera_on = RwSignal::new(false);
+    // Whether this page last told the bot to enable its motors. The bot
+    // disables them whenever the controlling session ends, so after a
+    // reconnect this goes false and the STOP button becomes ENABLE.
+    let motors_enabled = RwSignal::new(false);
     let theme = RwSignal::new(load_theme());
     let curve = RwSignal::new(load_curve());
 
@@ -184,11 +205,29 @@ pub fn App() -> impl IntoView {
     // Send enable + first battery poll on open
     {
         let ws_for_open = ws.clone();
+        // Auto-enable fires on the FIRST open only. Re-enabling on every
+        // reconnect meant a network blip brought the motors back live with no
+        // operator action — and the robot may have moved or be in someone's
+        // hands by then. After a drop the operator must explicitly re-enable.
+        let enabled_once = std::cell::Cell::new(false);
         Effect::new(move |prev_state: Option<ConnState>| {
             let state = conn_state_for_open.get();
             if state == ConnState::Open && prev_state != Some(ConnState::Open) {
-                ws_for_open.send(&I2CCommand::enable());
+                if !enabled_once.get() {
+                    enabled_once.set(true);
+                    if ws_for_open.send(&I2CCommand::enable()) {
+                        motors_enabled.set(true);
+                    }
+                }
                 ws_for_open.send(&I2CCommand::read_power());
+            }
+            // The firmware disables the motors when a session ends, so any
+            // drop means the operator has to re-enable (ENABLE button). Before
+            // this, the UI kept showing STOP with no way to re-enable short of
+            // reloading the page -- after a Wi-Fi blip it simply "stopped
+            // working".
+            if state != ConnState::Open {
+                motors_enabled.set(false);
             }
             state
         });
@@ -210,6 +249,9 @@ pub fn App() -> impl IntoView {
         let conn_state_for_poll = conn_state;
         let _timer = gloo_timers::callback::Interval::new(5_000, move || {
             if conn_state_for_poll.get_untracked() == ConnState::Open {
+                // Two missed battery replies: the link is gone even if the
+                // browser still reports the socket open.
+                ws_for_poll.close_if_stale(12_000.0);
                 ws_for_poll.send(&I2CCommand::read_power());
             }
         });
@@ -219,9 +261,28 @@ pub fn App() -> impl IntoView {
 
     ws.connect();
 
+    // Phones suspend timers while the screen is off or the tab is hidden, and
+    // often leave Wi-Fi meanwhile. When the page comes back, reconnect at once
+    // rather than waiting out up to 15 s of backoff.
+    if let Some(document) = web_sys::window().and_then(|w| w.document()) {
+        let ws_for_visible = ws.clone();
+        let doc_for_cb = document.clone();
+        let on_visibility = Closure::<dyn FnMut()>::new(move || {
+            if !doc_for_cb.hidden() {
+                ws_for_visible.reconnect_now();
+            }
+        });
+        let _ = document.add_event_listener_with_callback(
+            "visibilitychange",
+            on_visibility.as_ref().unchecked_ref(),
+        );
+        on_visibility.forget();
+    }
+
     let ws_for_joystick = ws.clone();
     let ws_for_drawer = ws.clone();
     let ws_for_camera = ws.clone();
+    let ws_for_estop = ws.clone();
 
     let on_reconnect = {
         let ws = ws.clone();
@@ -240,7 +301,9 @@ pub fn App() -> impl IntoView {
 
     view! {
         <TopStrip
+            ws=ws_for_estop
             conn_state=conn_state
+            motors_enabled=motors_enabled
             battery_label=battery_label
             drawer_open=drawer_open
         />

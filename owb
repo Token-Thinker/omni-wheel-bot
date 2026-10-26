@@ -1,0 +1,35 @@
+#!/bin/sh
+# owb: run `cargo xtask <args>` on this machine if it has Rust, otherwise
+# inside the espressif/idf-rust image, so a machine with only Docker can still
+# build and flash. Only picks host vs container; everything else is in xtask/.
+#   ./owb build --profile owb-esp32s3-v1-alpha --force-softap
+#   ./owb flash --port /dev/ttyACM0      (forwarded into the container as --device)
+# OWB_FORCE_DOCKER=1 uses the container even when cargo is installed.
+set -eu
+repo=$(cd "$(dirname "$0")" && pwd)
+if command -v cargo >/dev/null 2>&1 && [ -z "${OWB_FORCE_DOCKER:-}" ]; then
+  cd "$repo" && exec cargo xtask "$@"
+fi
+ver=$(sed -n 's/^rust-version *= *"\([^"]*\)".*/\1/p' "$repo/owb-core/Cargo.toml")
+opts="-v $repo:/workspace -w /workspace --group-add $(id -g)"
+[ -t 0 ] && [ -t 1 ] && opts="$opts -it"
+port= prev=
+for a in "$@"; do
+  case $prev in --port) port=$a ;; esac
+  case $a in --port=*) port=${a#--port=} ;; esac
+  prev=$a
+done
+# Serial device + its group (dialout), so the image's esp user can open it.
+[ -n "$port" ] && [ -e "$port" ] && opts="$opts --device $port --group-add $(stat -c %g "$port")"
+# Forward SSID/PASSWORD/AP_*/CONTROL_KEY/OWB_* (name only: docker copies the value if set).
+for v in SSID PASSWORD AP_SSID AP_PASSWORD CONTROL_KEY IO_PROFILE TERM $(env | sed -n 's/^\(OWB_[A-Za-z0-9_]*\)=.*/\1/p'); do
+  opts="$opts -e $v"
+done
+# --init: without it `sh` is PID 1 and ignores SIGTERM, so killing this
+# launcher (Ctrl-C without a TTY, `timeout`) orphaned a running `monitor`
+# container that kept /dev/ttyACM0 busy.
+# xtask builds into target/docker/xtask (not the host's target/debug) with a persistent registry.
+# shellcheck disable=SC2086 # $opts is word-split on purpose; paths with spaces are unsupported
+exec docker run --rm --init $opts -e OWB_IN_CONTAINER=1 \
+  -e CARGO_TARGET_DIR=/workspace/target/docker/xtask -e CARGO_HOME=/workspace/target/docker/xtask/cargo-home \
+  --entrypoint sh "espressif/idf-rust:all_${ver}.0" -c '. /home/esp/export-esp.sh && exec cargo xtask "$@"' owb "$@"

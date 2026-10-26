@@ -1,0 +1,13 @@
+[package]
+name = "xtask"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Build / flash / monitor / CI tooling for the omni-wheel bot (`cargo xtask`)"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+# Native serial monitor and the reset-into-app pulse. Default features
+# (libudev enumeration) are unneeded: ports are enumerated through sysfs, and
+# skipping libudev keeps the crate buildable inside the idf-rust image.
+serialport = { version = "4", default-features = false }

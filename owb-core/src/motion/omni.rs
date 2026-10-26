@@ -17,9 +17,20 @@ pub struct PidGains {
 /// Drivetrain geometry and control-loop tuning for a board profile.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DriveTuning {
+    /// Wheel radius (m). Cancels out of the normalised control path — it only
+    /// affects physical quantities (reported m/s, encoder-to-distance
+    /// odometry, and the deg/s yaw mapping via `robot_radius_m`).
     pub wheel_radius_m: f32,
+    /// Centre-to-wheel distance (m). Also cancels out of the normalised path;
+    /// it sets absolute yaw authority.
     pub robot_radius_m: f32,
     pub max_wheel_rad_s: f32,
+    /// Wheel **drive-direction** angles in degrees.
+    ///
+    /// Unlike the two radii above, this genuinely determines how the robot
+    /// steers, so it belongs per-board. Defaults to
+    /// [`crate::motion::kinematics::DEFAULT_WHEEL_ANGLES_DEG`] (60/180/300).
+    pub wheel_angles_deg: [f32; 3],
     pub control_dt_ms: u16,
     pub motor_deadband_norm: f32,
     pub counts_per_wheel_revolution: u16,

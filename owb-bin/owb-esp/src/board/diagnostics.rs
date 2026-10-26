@@ -2,7 +2,21 @@ use log::{info, warn};
 use owb_core::platform::BoardRuntimeKind;
 
 use super::BoardCapabilities;
-use crate::profile::{AddressableLed, BoardProfile, EncoderChannelPins, MotorPins, StatusLed};
+use crate::profile::{
+    AddressableLed,
+    BoardProfile,
+    CameraPins,
+    EncoderChannelPins,
+    MotorPins,
+    StatusLed,
+};
+
+/// Upper bound on tracked pin assignments. Worst case today is I2C (2) +
+/// motor (7) + encoder (6) + LEDs (2) + camera (14) = 31, so this leaves
+/// headroom for V2's wider pin map rather than sitting one pin from the cap.
+const MAX_PIN_USES: usize = 48;
+
+type PinUses = [Option<PinUse>; MAX_PIN_USES];
 
 #[derive(Clone, Copy)]
 struct PinUse {
@@ -11,20 +25,28 @@ struct PinUse {
 }
 
 fn push_pin_use(
-    uses: &mut [Option<PinUse>; 32],
+    uses: &mut PinUses,
     len: &mut usize,
     pin: u8,
     label: &'static str,
 ) {
     if *len >= uses.len() {
+        // Dropping a pin here would silently weaken the conflict check, so say
+        // so: the table needs raising, not a quiet truncation.
+        warn!(
+            "board wiring: pin-use table full ({} entries), cannot check {} on GPIO{}; raise MAX_PIN_USES",
+            uses.len(),
+            label,
+            pin
+        );
         return;
     }
     uses[*len] = Some(PinUse { pin, label });
     *len += 1;
 }
 
-fn collect_pin_uses(profile: &BoardProfile) -> ([Option<PinUse>; 32], usize) {
-    let mut uses: [Option<PinUse>; 32] = [None; 32];
+fn collect_pin_uses(profile: &BoardProfile) -> (PinUses, usize) {
+    let mut uses: PinUses = [None; MAX_PIN_USES];
     let mut len = 0;
 
     push_pin_use(&mut uses, &mut len, profile.i2c_bus.sda, "i2c.sda");
@@ -46,11 +68,20 @@ fn collect_pin_uses(profile: &BoardProfile) -> ([Option<PinUse>; 32], usize) {
         push_pin_use(&mut uses, &mut len, pin, "addressable_led");
     }
 
+    // Only when the camera is actually brought up. `profile.camera` is not an
+    // Option, so an inactive profile still carries a pin map -- and on the v1
+    // drive/PID profiles those pins are deliberately reused for motors and
+    // encoders. Including them unconditionally would report conflicts that do
+    // not exist on that boot.
+    if profile.has_camera {
+        collect_camera_pins(&mut uses, &mut len, profile.camera);
+    }
+
     (uses, len)
 }
 
 fn collect_motor_pins(
-    uses: &mut [Option<PinUse>; 32],
+    uses: &mut PinUses,
     len: &mut usize,
     motor: MotorPins,
 ) {
@@ -64,7 +95,7 @@ fn collect_motor_pins(
 }
 
 fn collect_encoder_pins(
-    uses: &mut [Option<PinUse>; 32],
+    uses: &mut PinUses,
     len: &mut usize,
     encoders: [EncoderChannelPins; 3],
 ) {
@@ -74,6 +105,42 @@ fn collect_encoder_pins(
     push_pin_use(uses, len, encoders[1].b, "encoder2.b");
     push_pin_use(uses, len, encoders[2].a, "encoder3.a");
     push_pin_use(uses, len, encoders[2].b, "encoder3.b");
+}
+
+fn collect_camera_pins(
+    uses: &mut PinUses,
+    len: &mut usize,
+    camera: CameraPins,
+) {
+    push_pin_use(uses, len, camera.xclk, "camera.xclk");
+    push_pin_use(uses, len, camera.pclk, "camera.pclk");
+    push_pin_use(uses, len, camera.vsync, "camera.vsync");
+    push_pin_use(uses, len, camera.href, "camera.href");
+    for (index, pin) in [
+        camera.d0, camera.d1, camera.d2, camera.d3, camera.d4, camera.d5, camera.d6, camera.d7,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        // Labels are &'static, so index into a fixed table rather than format.
+        const DATA_LABELS: [&str; 8] = [
+            "camera.d0",
+            "camera.d1",
+            "camera.d2",
+            "camera.d3",
+            "camera.d4",
+            "camera.d5",
+            "camera.d6",
+            "camera.d7",
+        ];
+        push_pin_use(uses, len, pin, DATA_LABELS[index]);
+    }
+    if let Some(pin) = camera.pwdn {
+        push_pin_use(uses, len, pin, "camera.pwdn");
+    }
+    if let Some(pin) = camera.reset {
+        push_pin_use(uses, len, pin, "camera.reset");
+    }
 }
 
 pub(super) fn log_profile_wiring_diagnostics(

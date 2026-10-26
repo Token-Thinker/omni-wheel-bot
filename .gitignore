@@ -15,6 +15,9 @@ schematic/
 .env
 .env.local
 config/devkit_wiring.local.env
+
+## Per-lab board overrides — lab inventory stays out of the public repo
+config/board_registry.local.tsv
 # compile-time WiFi config (alternative to env vars)
 owb-bin/owb-esp/cfg.toml
 
@@ -26,3 +29,6 @@ owb-bin/owb-esp/cfg.toml
 
 # JetBrains IDE files
 .idea/
+
+# Local MCP server config: contains per-install localhost ports.
+.mcp.json

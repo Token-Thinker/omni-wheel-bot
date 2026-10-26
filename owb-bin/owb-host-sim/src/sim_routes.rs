@@ -3,7 +3,7 @@
 //! Stays completely behind the `/sim/*` prefix so the existing
 //! `/embedded`, `/dev`, and `/ws` surfaces keep their current behaviour.
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use axum::{
     extract::{
@@ -23,7 +23,7 @@ use tokio::{
 };
 use tracing::warn;
 
-use crate::sim_engine::SimEngine;
+use crate::sim_engine::{SimDriveMode, SimEngine};
 
 /// Frequency at which `/sim/state` frames are pushed to connected viewers.
 const STATE_HZ: u64 = 10;
@@ -113,6 +113,11 @@ struct ConfigBody {
     heading_hold: Option<bool>,
     #[serde(default)]
     heading_kp: Option<f32>,
+    /// `"two_wheel_front"` (v1-alpha) or `"tri_wheel_omni"` (v2). Unrecognised
+    /// values are ignored rather than defaulting, so a typo cannot silently
+    /// switch the model out from under a test run.
+    #[serde(default)]
+    drive_mode: Option<String>,
 }
 
 async fn sim_reset(State(ctx): State<Arc<SimContext>>) -> impl IntoResponse {
@@ -153,29 +158,41 @@ async fn sim_config(
     if let (Some(w1), Some(w2)) = (body.slip_w1, body.slip_w2) {
         engine.set_slip(w1, w2);
     }
+    // Non-draining getters, not `snapshot()`: the UI POSTs here on every slider
+    // `input` event, and `snapshot()` consumes the accumulated encoder delta —
+    // so dragging a slider used to continuously wipe the encoder telemetry the
+    // broadcaster was about to report (and clone the 600-entry history each
+    // time, up to 4x per request).
     else if let Some(w1) = body.slip_w1 {
-        let current = engine.snapshot().slip;
+        let current = engine.slip();
         engine.set_slip(w1, current[1]);
     }
     else if let Some(w2) = body.slip_w2 {
-        let current = engine.snapshot().slip;
+        let current = engine.slip();
         engine.set_slip(current[0], w2);
     }
     if let Some(s) = body.stiction {
         engine.set_stiction(s);
     }
     if body.trim_w1.is_some() || body.trim_w2.is_some() || body.trim_w3.is_some() {
-        let snap = engine.snapshot();
-        let w1 = body.trim_w1.unwrap_or(snap.trim[0]);
-        let w2 = body.trim_w2.unwrap_or(snap.trim[1]);
-        let w3 = body.trim_w3.unwrap_or(snap.trim[2]);
+        let trim = engine.trim();
+        let w1 = body.trim_w1.unwrap_or(trim[0]);
+        let w2 = body.trim_w2.unwrap_or(trim[1]);
+        let w3 = body.trim_w3.unwrap_or(trim[2]);
         engine.set_wheel_trim(w1, w2, w3);
     }
     if body.heading_hold.is_some() || body.heading_kp.is_some() {
-        let snap = engine.snapshot();
-        let enable = body.heading_hold.unwrap_or(snap.heading_hold.enable);
-        let kp = body.heading_kp.unwrap_or(snap.heading_hold.kp);
+        let hh = engine.heading_hold();
+        let enable = body.heading_hold.unwrap_or(hh.enable);
+        let kp = body.heading_kp.unwrap_or(hh.kp);
         engine.set_heading_hold(enable, kp);
+    }
+    if let Some(mode) = body.drive_mode.as_deref() {
+        match mode {
+            "two_wheel_front" => engine.set_drive_mode(SimDriveMode::TwoWheelFront),
+            "tri_wheel_omni" => engine.set_drive_mode(SimDriveMode::TriWheelOmni),
+            other => warn!("sim config: ignoring unknown drive_mode {other:?}"),
+        }
     }
     axum::Json(serde_json::json!({"status":"ok"}))
 }
@@ -195,9 +212,11 @@ async fn handle_state_socket(
     let mut rx = ctx.tx.subscribe();
 
     // Send an immediate snapshot so the viewer doesn't have to wait a tick.
+    // Peek, not drain: a newly connected viewer must not steal the encoder
+    // delta out from under the periodic broadcaster.
     {
-        let mut engine = ctx.engine.lock().await;
-        let state = engine.snapshot();
+        let engine = ctx.engine.lock().await;
+        let state = engine.snapshot_peek();
         if let Ok(text) = serde_json::to_string(&serde_json::json!({
             "type":"sim_state",
             "frame": state,
@@ -288,10 +307,6 @@ pub async fn mirror_command(
     }
 }
 
-// Suppress the unused-import warning for HashMap on builds that don't use it.
-#[allow(dead_code)]
-fn _unused_hashmap(_: HashMap<String, String>) {}
-
 /// Static HTML+JS+CSS for the simple top-down sim view.
 const SIM_HTML: &str = r#"<!doctype html>
 <html lang="en">
@@ -332,6 +347,10 @@ const SIM_HTML: &str = r#"<!doctype html>
   @media (max-width: 880px){ main{grid-template-columns:1fr} }
   .card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:.85rem 1rem}
   canvas{display:block;width:100%;height:auto;background:var(--panel);border:1px solid var(--border);border-radius:10px}
+  #stage3d{cursor:grab;touch-action:none}
+  #stage3d.dragging{cursor:grabbing}
+  .view3d-bar{display:flex;align-items:center;justify-content:space-between;margin-top:.5rem}
+  .hint3d{color:var(--muted);font-size:.75rem}
   .status{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:.4rem .9rem;margin-top:.6rem;font-variant-numeric:tabular-nums}
   .status div span:first-child{color:var(--muted);display:block;text-transform:uppercase;font-size:.7rem;letter-spacing:.05em}
   .status div span:last-child{font-weight:600}
@@ -359,14 +378,23 @@ const SIM_HTML: &str = r#"<!doctype html>
 </header>
 <main>
   <section class="card">
+    <canvas id="stage3d" width="720" height="420"></canvas>
+    <div class="view3d-bar">
+      <span class="hint3d">drag to orbit &middot; scroll to zoom</span>
+      <button class="theme-toggle" id="reset3d" type="button">reset view</button>
+    </div>
+  </section>
+
+  <section class="card">
     <canvas id="stage" width="720" height="540"></canvas>
     <div class="status">
       <div><span>Pose</span><span id="s-pose">0.000, 0.000 m</span></div>
       <div><span>Yaw</span><span id="s-yaw">0.0°</span></div>
-      <div><span>Wheel L / R</span><span id="s-wheels">0.00 / 0.00 m/s</span></div>
+      <div><span>Drive mode</span><span id="s-mode">two wheel front</span></div>
+      <div><span>Wheel W1/W2/W3</span><span id="s-wheels">0.00 / 0.00 / 0.00 m/s</span></div>
       <div><span>Trim W1/W2/W3</span><span id="s-trim">1.00 / 1.00 / 1.00</span></div>
       <div><span>Slip W1/W2</span><span id="s-slip">0.00 / 0.00</span></div>
-      <div><span>Stiction</span><span id="s-stict">0.55</span></div>
+      <div><span>Stiction</span><span id="s-stict">0.45</span></div>
       <div><span>Heading hold</span><span id="s-hhold">off</span></div>
       <div><span>Enabled / Paused</span><span id="s-state">on / no</span></div>
       <div><span>Tick</span><span id="s-tick">0</span></div>
@@ -545,7 +573,9 @@ const SIM_HTML: &str = r#"<!doctype html>
   function updateStatus(f) {
     $('s-pose').textContent = `${f.x_m.toFixed(2)}, ${f.y_m.toFixed(2)} m`;
     $('s-yaw').textContent  = `${(f.yaw_rad*180/Math.PI).toFixed(1)}°`;
-    $('s-wheels').textContent = `${f.v_left.toFixed(2)} / ${f.v_right.toFixed(2)} m/s`;
+    const wv = f.wheels || [f.v_left, f.v_right, 0];
+    $('s-wheels').textContent = `${wv[0].toFixed(2)} / ${wv[1].toFixed(2)} / ${wv[2].toFixed(2)} m/s`;
+    $('s-mode').textContent = (f.drive_mode || '').replace(/_/g, ' ');
     $('s-trim').textContent = f.trim.map(v=>v.toFixed(2)).join(' / ');
     $('s-slip').textContent = f.slip.map(v=>v.toFixed(2)).join(' / ');
     $('s-stict').textContent = f.stiction.toFixed(2);
@@ -556,6 +586,251 @@ const SIM_HTML: &str = r#"<!doctype html>
       $('replay-status').textContent = `Replay ${f.replay.frame}/${f.replay.total} — ${f.replay.path}`;
     }
   }
+
+  // ---------------------------------------------------------------------
+  // 3D view
+  //
+  // Hand-rolled projection on a 2D canvas rather than WebGL/three.js: this
+  // page is served by the robot itself over SoftAP with no internet, and the
+  // whole firmware image is ~1.5 MB, so a CDN script or a vendored 3D library
+  // is not an option. A box-and-cylinders scene needs so little that a ~30
+  // line projection plus painter-sorted polygons is the cheaper trade.
+  //
+  // Geometry mirrors owb-core's EmbodiedKinematics exactly so the picture
+  // cannot drift from the model: wheels at [60, 180, 300] degrees on a
+  // ROBOT_R circle, wheel radius WHEEL_R. World axes are +x forward at yaw 0,
+  // +y left, +z up.
+  // ---------------------------------------------------------------------
+  const WHEEL_R = 0.148;          // DEFAULT_DRIVE_TUNING.wheel_radius_m
+  const ROBOT_R = 0.195;          // DEFAULT_DRIVE_TUNING.robot_radius_m
+  const WHEEL_W = 0.045;          // visual tread width only
+  const WHEEL_ANGLES = [Math.PI/3, Math.PI, 5*Math.PI/3];
+  const DECK_Z = WHEEL_R * 0.95;  // deck sits just below wheel tops
+  const DECK_T = 0.03;            // deck thickness
+
+  const stage3d = $('stage3d');
+  const g3 = stage3d.getContext('2d');
+  // Azimuth is chosen so none of the three wheels sits edge-on (they are at
+  // 60/180/300 deg, so a camera aligned with any wheel's disc plane flattens
+  // it into a slab). Elevation looks down enough to read all three.
+  const DEFAULT_CAM = { az: -0.35, el: 0.62, dist: 1.7, fov: 620 };
+  let cam = { ...DEFAULT_CAM };
+  // Wheel spin is integrated locally so the wheels turn smoothly between the
+  // 10 Hz state frames instead of stepping.
+  let spin = [0, 0, 0];
+  let lastFrameMs = performance.now();
+
+  function fit3d() {
+    const r = stage3d.getBoundingClientRect();
+    stage3d.width = Math.max(320, Math.floor(r.width));
+    stage3d.height = Math.floor(stage3d.width * 0.52);
+  }
+  window.addEventListener('resize', fit3d);
+  fit3d();
+
+  // Orbit + zoom
+  {
+    let dragging = false, px = 0, py = 0;
+    stage3d.addEventListener('pointerdown', (e) => {
+      dragging = true; px = e.clientX; py = e.clientY;
+      stage3d.classList.add('dragging');
+      stage3d.setPointerCapture(e.pointerId);
+    });
+    stage3d.addEventListener('pointermove', (e) => {
+      if (!dragging) return;
+      cam.az -= (e.clientX - px) * 0.008;
+      cam.el += (e.clientY - py) * 0.006;
+      // Keep the camera above the floor and below straight-down.
+      cam.el = Math.max(0.05, Math.min(1.45, cam.el));
+      px = e.clientX; py = e.clientY;
+    });
+    const stop = () => { dragging = false; stage3d.classList.remove('dragging'); };
+    stage3d.addEventListener('pointerup', stop);
+    stage3d.addEventListener('pointercancel', stop);
+    stage3d.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      cam.dist = Math.max(0.6, Math.min(6, cam.dist * (1 + Math.sign(e.deltaY) * 0.1)));
+    }, { passive: false });
+    $('reset3d').onclick = () => { cam = { ...DEFAULT_CAM }; };
+  }
+
+  // World (z-up) -> screen. Returns null when behind the camera.
+  function project(p, cx, cy) {
+    const ca = Math.cos(cam.az), sa = Math.sin(cam.az);
+    const x1 =  p[0]*ca + p[1]*sa;
+    const y1 = -p[0]*sa + p[1]*ca;
+    const ce = Math.cos(cam.el), se = Math.sin(cam.el);
+    const y2 = y1*ce - p[2]*se;
+    const z2 = y1*se + p[2]*ce;
+    const depth = cam.dist + y2;
+    if (depth <= 0.05) return null;
+    const s = cam.fov / depth;
+    return [cx + x1*s, cy - z2*s, depth];
+  }
+
+  // Body-frame -> world, applying robot yaw. Pose is kept at the origin so the
+  // camera stays centred on the robot; the ground grid scrolls instead.
+  function body2world(p, yaw) {
+    const c = Math.cos(yaw), s = Math.sin(yaw);
+    return [p[0]*c - p[1]*s, p[0]*s + p[1]*c, p[2]];
+  }
+
+  function wheelPolys(i, yaw, col, edge) {
+    const th = WHEEL_ANGLES[i];
+    const cxw = ROBOT_R * Math.cos(th), cyw = ROBOT_R * Math.sin(th);
+    // Axle points radially outward; the disc spans tangential x up.
+    const tx = -Math.sin(th), ty = Math.cos(th);
+    const ax =  Math.cos(th), ay = Math.sin(th);
+    const N = 14, polys = [];
+    const rim = (off, phase) => {
+      const pts = [];
+      for (let k = 0; k < N; k++) {
+        const a = phase + k * 2*Math.PI/N;
+        const rc = Math.cos(a) * WHEEL_R, rz = Math.sin(a) * WHEEL_R;
+        pts.push(body2world([
+          cxw + tx*rc + ax*off,
+          cyw + ty*rc + ay*off,
+          WHEEL_R + rz,
+        ], yaw));
+      }
+      return pts;
+    };
+    const inner = rim(-WHEEL_W/2, spin[i]);
+    const outer = rim(+WHEEL_W/2, spin[i]);
+    // Tread band as quads so the wheel reads as solid from any angle.
+    for (let k = 0; k < N; k++) {
+      const k2 = (k+1) % N;
+      polys.push({ pts: [inner[k], inner[k2], outer[k2], outer[k]], fill: col, edge: null });
+    }
+    polys.push({ pts: outer, fill: edge, edge: edge });
+    polys.push({ pts: inner, fill: edge, edge: edge });
+    // A spoke pair makes rotation legible.
+    for (let s = 0; s < 2; s++) {
+      const a = spin[i] + s * Math.PI/2;
+      const rc = Math.cos(a) * WHEEL_R * 0.92, rz = Math.sin(a) * WHEEL_R * 0.92;
+      const p0 = body2world([cxw + ax*WHEEL_W/2, cyw + ay*WHEEL_W/2, WHEEL_R], yaw);
+      const p1 = body2world([
+        cxw + tx*rc + ax*WHEEL_W/2, cyw + ty*rc + ay*WHEEL_W/2, WHEEL_R + rz,
+      ], yaw);
+      polys.push({ pts: [p0, p1], fill: null, edge: '#ffffff88', line: 2 });
+    }
+    return polys;
+  }
+
+  function deckPolys(yaw, col, edge) {
+    const N = 18, top = [], bot = [], polys = [];
+    for (let k = 0; k < N; k++) {
+      const a = k * 2*Math.PI/N;
+      const x = ROBOT_R*0.82*Math.cos(a), y = ROBOT_R*0.82*Math.sin(a);
+      top.push(body2world([x, y, DECK_Z + DECK_T], yaw));
+      bot.push(body2world([x, y, DECK_Z], yaw));
+    }
+    for (let k = 0; k < N; k++) {
+      const k2 = (k+1) % N;
+      polys.push({ pts: [bot[k], bot[k2], top[k2], top[k]], fill: edge, edge: null });
+    }
+    polys.push({ pts: top, fill: col, edge: edge });
+    return polys;
+  }
+
+  function paint3d() {
+    const W = stage3d.width, H = stage3d.height;
+    const st = getComputedStyle(document.documentElement);
+    const grid   = st.getPropertyValue('--grid').trim()  || 'rgba(0,0,0,.08)';
+    const trailC = st.getPropertyValue('--trail').trim() || 'rgba(37,99,235,.55)';
+    const robotC = st.getPropertyValue('--robot').trim() || '#2563eb';
+    const strokeC= st.getPropertyValue('--robot-stroke').trim() || '#1e3a8a';
+    const muted  = st.getPropertyValue('--muted').trim() || '#6b7280';
+
+    g3.clearRect(0, 0, W, H);
+    const cx = W/2, cy = H*0.62;
+    const yaw = last ? last.yaw_rad : 0;
+    const ox = last ? last.x_m : 0, oy = last ? last.y_m : 0;
+
+    // Ground grid, drawn in world space but offset by the robot pose so the
+    // floor appears to move under a stationary robot.
+    g3.strokeStyle = grid; g3.lineWidth = 1;
+    const EXT = 2.0, STEP = 0.25;
+    const fx = ox - Math.round(ox/STEP)*STEP, fy = oy - Math.round(oy/STEP)*STEP;
+    for (let i = -EXT; i <= EXT + 1e-6; i += STEP) {
+      for (const seg of [
+        [[i - fx, -EXT - fy, 0], [i - fx, EXT - fy, 0]],
+        [[-EXT - fx, i - fy, 0], [EXT - fx, i - fy, 0]],
+      ]) {
+        const a = project(seg[0], cx, cy), b = project(seg[1], cx, cy);
+        if (!a || !b) continue;
+        g3.beginPath(); g3.moveTo(a[0], a[1]); g3.lineTo(b[0], b[1]); g3.stroke();
+      }
+    }
+
+    // Pose trail on the floor, relative to the robot.
+    if (last && last.history && last.history.length > 1) {
+      g3.strokeStyle = trailC; g3.lineWidth = 2; g3.beginPath();
+      let started = false;
+      for (const h of last.history) {
+        const p = project([h.x - ox, h.y - oy, 0.002], cx, cy);
+        if (!p) { started = false; continue; }
+        if (!started) { g3.moveTo(p[0], p[1]); started = true; } else g3.lineTo(p[0], p[1]);
+      }
+      g3.stroke();
+    }
+
+    // Robot: collect polys, sort far-to-near, draw.
+    const polys = [];
+    polys.push(...deckPolys(yaw, robotC, strokeC));
+    // In two-wheel mode W3 is physically undriveable on v1-alpha, so grey it
+    // out; in omni mode all three are live.
+    const omni = last && last.drive_mode === 'tri_wheel_omni';
+    for (let i = 0; i < 3; i++) {
+      const active = omni || i < 2;
+      polys.push(...wheelPolys(i, yaw, active ? '#2f3540' : '#6b7280', active ? '#1b1f27' : '#4b5563'));
+    }
+    // Heading arrow along +x.
+    {
+      const a = project(body2world([ROBOT_R*0.55, 0, DECK_Z + DECK_T + 0.005], yaw), cx, cy);
+      const b = project(body2world([ROBOT_R*1.15, 0, DECK_Z + DECK_T + 0.005], yaw), cx, cy);
+      if (a && b) polys.push({ pts: [[0,0,0],[0,0,0]], raw: [a, b], fill: null, edge: strokeC, line: 3 });
+    }
+
+    const drawn = polys.map((p) => {
+      if (p.raw) return { ...p, scr: p.raw, depth: (p.raw[0][2] + p.raw[1][2]) / 2 };
+      const scr = p.pts.map((q) => project(q, cx, cy));
+      if (scr.some((s) => !s)) return null;
+      return { ...p, scr, depth: scr.reduce((acc, s) => acc + s[2], 0) / scr.length };
+    }).filter(Boolean).sort((a, b) => b.depth - a.depth);
+
+    for (const p of drawn) {
+      g3.beginPath();
+      g3.moveTo(p.scr[0][0], p.scr[0][1]);
+      for (let i = 1; i < p.scr.length; i++) g3.lineTo(p.scr[i][0], p.scr[i][1]);
+      if (p.scr.length > 2) g3.closePath();
+      if (p.fill) { g3.fillStyle = p.fill; g3.fill(); }
+      if (p.edge) { g3.strokeStyle = p.edge; g3.lineWidth = p.line || 1; g3.stroke(); }
+    }
+
+    if (!last) {
+      g3.fillStyle = muted; g3.font = '12px system-ui';
+      g3.fillText('waiting for sim state…', 12, 18);
+    }
+  }
+
+  // Smooth wheel spin + continuous redraw, independent of the 10 Hz frames.
+  function tick3d(nowMs) {
+    const dt = Math.min(0.1, (nowMs - lastFrameMs) / 1000);
+    lastFrameMs = nowMs;
+    if (last) {
+      // `wheels` carries all three post-friction rim velocities in m/s
+      // (wheels[2] is 0 in two-wheel mode); omega = v / r. Driving the
+      // animation from the post-friction values means a wheel held below the
+      // stiction floor visibly stops, instead of spinning while the model has
+      // it stalled.
+      const wv = last.wheels || [last.v_left, last.v_right, 0];
+      for (let i = 0; i < 3; i++) spin[i] += (wv[i] / WHEEL_R) * dt;
+    }
+    paint3d();
+    requestAnimationFrame(tick3d);
+  }
+  requestAnimationFrame(tick3d);
 
   // Drawing
   function paint() {

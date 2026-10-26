@@ -118,9 +118,13 @@ pub struct BoardProfile {
     pub default_wheel_trim: [f32; 3],
     /// Minimum effective forward speed-norm magnitude pushed to the motors
     /// when the operator commands any forward motion above the deadband.
-    /// Designed to bypass the static-friction floor measured on this chassis
-    /// (~0.55 of full PWM). 0.0 disables the floor.
+    /// Designed to bypass the static-friction floor measured on this chassis.
+    /// 0.0 disables the floor.
     pub min_forward_speed_norm: f32,
+    /// Ceiling on the duty the drive path sends to any wheel, applied after
+    /// trim. Commands above it clamp rather than scale, so the stiction floor
+    /// keeps its meaning. 1.0 = no cap.
+    pub max_drive_duty: f32,
     /// Duration in milliseconds of an additive PWM "kick" applied when the
     /// operator transitions from idle to commanded forward motion (or flips
     /// the direction of travel). Designed to break the chassis out of static
@@ -143,9 +147,34 @@ const POLOLU_5161_COUNTS_PER_WHEEL_REV: u16 = 12 * 50;
 const EXEC_PLAN_S3_DUAL: RuntimeExecutionPlan = RuntimeExecutionPlan::dual_core(1, 0, 0);
 
 const DEFAULT_DRIVE_TUNING: DriveTuning = DriveTuning {
-    wheel_radius_m: 0.148,
+    // 38 mm Nexus omni wheel => 19 mm radius. NOTE the units: metres, not mm.
+    //
+    // Why this is safe to change: `wheel_radius_m` and `robot_radius_m` CANCEL
+    // OUT of the normalised control path. `compute_wheel_velocities` scales the
+    // command by `max_linear_speed = max_wheel_rad_s * r` and the Jacobian
+    // divides by `r`, so the normalised wheel output depends only on the wheel
+    // *angles*. Verified numerically with r = 0.019, 0.148 and 1.0 — identical
+    // output. So these values only affect genuinely physical quantities:
+    //   * `max_yaw_deg_s`, hence the deg/s -> normalised yaw mapping
+    //   * `max_linear_speed`, i.e. any m/s figure we report
+    //   * encoder counts -> distance (odometry)
+    wheel_radius_m: 0.019,
     robot_radius_m: 0.195,
-    max_wheel_rad_s: 25.0,
+    // Measured on the v1-alpha bench unit, not nominal: `probe_speed 1.0` gave
+    // 4769 counts/s = 7.95 rev/s = 49.9 rad/s. The previous 25.0 was half the
+    // real value, which mattered because `TriWheelPidController` normalises
+    // feedback as `measured_rad_s / max_wheel_rad_s` — so `measured_norm`
+    // clamped to 1.0 permanently and the PID fought its own setpoint.
+    //
+    // With r = 0.019 and 50.0 the derived figures finally match reality:
+    // max_linear_speed = 0.95 m/s (the host-sim independently uses 0.9), and
+    // max_yaw = 279 deg/s. The old pair implied 3.7 m/s and 1087 deg/s
+    // (3 rev/s), neither of which this robot can do.
+    max_wheel_rad_s: 50.0,
+    // The one geometry input that actually changes steering (the two radii
+    // above provably cancel). Carried per-board so a rotated layout is a
+    // config change, not a code change.
+    wheel_angles_deg: owb_core::motion::kinematics::DEFAULT_WHEEL_ANGLES_DEG,
     control_dt_ms: 50,
     motor_deadband_norm: 0.15,
     counts_per_wheel_revolution: POLOLU_5161_COUNTS_PER_WHEEL_REV,
@@ -197,6 +226,7 @@ pub const XIAO_SEEDSTUDIO_SENSE_CAM: BoardProfile = BoardProfile {
     execution_plan: EXEC_PLAN_S3_DUAL,
     default_wheel_trim: [1.0, 1.0, 1.0],
     min_forward_speed_norm: 0.0,
+    max_drive_duty: 1.0,
     stiction_kick_ms: 0,
     stiction_kick_boost_norm: 0.0,
     wheel_phase_invert: [false, false, false],
@@ -254,6 +284,7 @@ pub const ESP32_S3_DEVKITC_1_N32R16: BoardProfile = BoardProfile {
     execution_plan: EXEC_PLAN_S3_DUAL,
     default_wheel_trim: [1.0, 1.0, 1.0],
     min_forward_speed_norm: 0.0,
+    max_drive_duty: 1.0,
     stiction_kick_ms: 0,
     stiction_kick_boost_norm: 0.0,
     wheel_phase_invert: [false, false, false],
@@ -317,17 +348,22 @@ pub const OWB_ESP32S3_V1: BoardProfile = BoardProfile {
         pixels: 2,
         inverted: false,
     }),
-    width: 400,
-    height: 296,
-    jpeg_quality_qs: 0x1c,
+    // 160x120 YUV422 fits the 40 KB camera DMA buffer (38,400 bytes); the
+    // old 400x296 did not. Same frame as v1-alpha.
+    width: 160,
+    height: 120,
+    jpeg_quality_qs: 0x3c,
     frame_interval_ms: 50,
-    // Disabled during v1 drive/PID bring-up so camera SCCB does not perturb
-    // the motor-control and network crash isolation path.
-    has_camera: false,
+    // On (was off during drive/PID bring-up): the bench unit has run the
+    // camera alongside motors and PID on v1-alpha without SCCB trouble, and
+    // `snap` returns real frames. JPEG and `/stream` are still broken on that
+    // unit by a D0/D3 (GPIO11/GPIO10) solder bridge -- hardware, not this flag.
+    has_camera: true,
     camera_only: false,
     execution_plan: EXEC_PLAN_S3_DUAL,
     default_wheel_trim: [1.0, 1.0, 1.0],
     min_forward_speed_norm: 0.0,
+    max_drive_duty: 1.0,
     stiction_kick_ms: 0,
     stiction_kick_boost_norm: 0.0,
     wheel_phase_invert: [false, false, false],
@@ -354,7 +390,15 @@ pub const OWB_ESP32S3_V1_ALPHA: BoardProfile = BoardProfile {
     // in both directions on this chassis; next board should still route
     // motor PHASE off any strapping pin as a defensive measure.
     default_wheel_trim: [0.93, 1.0, 1.0],
-    min_forward_speed_norm: 0.55,
+    // Measured breakaway is 0.40 duty on both wheels (`hil-check
+    // --characterize`, 2026-10-23); 0.05 of margin. The old 0.55 dated from
+    // when W1 was jammed by a screw.
+    min_forward_speed_norm: 0.45,
+    // Two wheels together run ~4000 c/s at 0.8 but drop to ~1600 at >= 0.9,
+    // and a single wheel at 1.0 runs ~35% slower than at 0.95 -- most likely
+    // the 1S LiPo supply sagging under load. Nothing above 0.8 is faster with
+    // both wheels driving, so cap there.
+    max_drive_duty: 0.8,
     // Startup PWM boost so cold-start commands above the deadband but near the
     // stiction floor still break the wheels free reliably. Pulse expires after
     // ~120 ms and the runtime reverts to the operator's commanded speed.
@@ -368,6 +412,22 @@ pub const OWB_ESP32S3_V1_ALPHA: BoardProfile = BoardProfile {
     ..OWB_ESP32S3_V1
 };
 
+/// **PLACEHOLDER — every pin in this profile is wrong and must be redone.**
+///
+/// The v2 board is schematic-only and its structure is not settled, so this map
+/// was never derived from a real layout. Treat the numbers as filler that exists
+/// only to keep the profile table compiling; do not wire anything to them and do
+/// not use them as a starting point for the real map.
+///
+/// Known-bad today (the boot conflict checker reports all of these):
+/// `GPIO4` sda+motor3.phase, `GPIO38` motor1.drive+enc1.a,
+/// `GPIO39` motor2.phase+enc1.b, `GPIO40` motor3.drive+enc2.a,
+/// `GPIO42` enc3.a+addressable_led. The camera pins happen not to collide,
+/// which is luck rather than design.
+///
+/// When the v2 structure is finalised, this whole block gets replaced --
+/// including re-deriving `drive_mode`, `active_wheels`, and
+/// `wheel_phase_invert`, none of which have seen hardware.
 pub const OWB_ESP32S3_V2: BoardProfile = BoardProfile {
     name: "owb-esp32s3-v2",
     family: BoardFamily::Esp32S3,
@@ -434,6 +494,7 @@ pub const OWB_ESP32S3_V2: BoardProfile = BoardProfile {
     execution_plan: EXEC_PLAN_S3_DUAL,
     default_wheel_trim: [1.0, 1.0, 1.0],
     min_forward_speed_norm: 0.0,
+    max_drive_duty: 1.0,
     stiction_kick_ms: 0,
     stiction_kick_boost_norm: 0.0,
     wheel_phase_invert: [false, false, false],
@@ -602,6 +663,19 @@ mod tests {
         assert!(OWB_ESP32S3_V2.encoder.is_some());
     }
 
+    /// The stiction floor must still break the wheels free (breakaway 0.40)
+    /// and sit under the duty cap, or every low command would clamp to it.
+    #[test]
+    fn v1_alpha_floor_sits_between_breakaway_and_duty_cap() {
+        let p = OWB_ESP32S3_V1_ALPHA;
+        assert!(p.min_forward_speed_norm > 0.40);
+        assert!(p.min_forward_speed_norm < p.max_drive_duty);
+        assert!(
+            p.max_drive_duty <= 0.8,
+            "two wheels collapse above 0.8 duty"
+        );
+    }
+
     #[test]
     fn v1_alpha_uses_two_front_wheel_drive_mode() {
         assert_eq!(
@@ -614,6 +688,15 @@ mod tests {
             47
         );
         assert!(OWB_ESP32S3_V1_ALPHA.has_camera);
+    }
+
+    /// Camera frames must fit the 40 KB internal-SRAM DMA buffer in YUV422.
+    #[test]
+    fn v1_camera_frame_fits_dma_buffer() {
+        for p in [OWB_ESP32S3_V1, OWB_ESP32S3_V1_ALPHA] {
+            assert!(p.has_camera);
+            assert!(u32::from(p.width) * u32::from(p.height) * 2 <= 40 * 1024);
+        }
     }
 
     #[test]

@@ -15,7 +15,7 @@ belong in follow-up branches.
 Use the HIL-low real-executor surface:
 
 ```bash
-IO_PROFILE=owb-esp32s3-v1 ./scripts/run_app.sh --real-executors --maker owb-esp --board esp32s3 --bin owb-esp --hil-low-mode --build --use-test-network
+SSID=<ssid> PASSWORD=<password> IO_PROFILE=owb-esp32s3-v1 ./owb build --real-executors --hil-low-mode
 ```
 
 After flashing/running, open the board IP at `/` or `/motor-test/`. The compact

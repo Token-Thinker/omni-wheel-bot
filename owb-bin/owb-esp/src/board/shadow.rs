@@ -148,6 +148,18 @@ impl CommandExecutor for ShadowBoardRuntime {
                     );
                     Ok(CommandReply::Ok)
                 }
+                I2CCommand::DriveLoop {
+                    closed_loop,
+                    pwm_stagger,
+                    trace,
+                    max_duty,
+                } => {
+                    info!(
+                        "shadow runtime {:?}: drive_loop closed_loop={:?} pwm_stagger={:?} trace={:?} max_duty={:?} (no-op)",
+                        self.runtime, closed_loop, pwm_stagger, trace, max_duty
+                    );
+                    Ok(CommandReply::Ok)
+                }
                 I2CCommand::Enable => {
                     SHADOW_ENABLED.store(true, Ordering::Relaxed);
                     info!("shadow runtime {:?}: enable", self.runtime);
