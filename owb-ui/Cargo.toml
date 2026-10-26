@@ -22,5 +22,5 @@ js-sys = "0.3"
 owb-msg = { path = "../owb-msg", version = "0.1.0" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", default-features = false, features = ["alloc"] }
-gloo-timers = { version = "0.3", features = ["futures"] }
+gloo-timers = { version = "0.4", features = ["futures"] }
 console_error_panic_hook = "0.1"
