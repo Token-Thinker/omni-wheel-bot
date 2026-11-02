@@ -39,4 +39,4 @@ serialport = { version = "4", default-features = false }
 # Blocking WebSocket client for owb-tune. Already in the lock file via axum's
 # `ws` feature (tokio-tungstenite 0.24), so this adds no new crates; the sync
 # API keeps the tuner a plain loop instead of an async state machine.
-tungstenite = { version = "0.24", default-features = false, features = ["handshake"] }
+tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
